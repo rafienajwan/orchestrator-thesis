@@ -5,6 +5,7 @@ from typing import cast
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict
 
+from agent.app.adapters.docker_adapter import DockerAdapterError
 from agent.app.core.models import AgentLocalState, ExecuteResponse
 from agent.app.services.workload_manager import AgentWorkloadManager
 from controller.models import ServiceSpec
@@ -27,6 +28,7 @@ class HealthResponse(BaseModel):
 
     status: str
     node_id: str
+    node_address: str
 
 
 def _get_workload_manager(request: Request) -> AgentWorkloadManager:
@@ -44,7 +46,13 @@ def build_router() -> APIRouter:
         request_payload: DeployRequest,
         manager: AgentWorkloadManager = Depends(_get_workload_manager),
     ) -> ExecuteResponse:
-        return await manager.deploy(request_payload.service)
+        try:
+            return await manager.deploy(request_payload.service)
+        except DockerAdapterError as exc:
+            detail = str(exc)
+            if "Published port conflict" in detail:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detail) from exc
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=detail) from exc
 
     @router.post("/execute/stop", response_model=ExecuteResponse)
     async def stop_service(
@@ -70,7 +78,11 @@ def build_router() -> APIRouter:
         settings = getattr(request.app.state, "settings", None)
         if settings is None:
             raise RuntimeError("Agent settings are not initialized")
-        return HealthResponse(status="ok", node_id=settings.node_id)
+        return HealthResponse(
+            status="ok",
+            node_id=settings.node_id,
+            node_address=settings.advertised_host,
+        )
 
     @router.get("/local-state", response_model=AgentLocalState)
     async def local_state(

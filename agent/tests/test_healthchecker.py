@@ -69,6 +69,7 @@ async def test_health_checker_retries_until_success(monkeypatch: pytest.MonkeyPa
     )
     store = AgentStateStore(
         node_id=settings.node_id,
+        node_address=settings.advertised_host,
         agent_url=settings.agent_public_url,
         controller_url=settings.controller_base_url,
     )
@@ -79,6 +80,7 @@ async def test_health_checker_retries_until_success(monkeypatch: pytest.MonkeyPa
         WorkloadRecord(
             service=service,
             container_id="container-1",
+            published_port=28000,
             container_ip="127.0.0.1",
             status=WorkloadStatus.running,
         )

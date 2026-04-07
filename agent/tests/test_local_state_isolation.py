@@ -45,6 +45,7 @@ async def test_local_state_only_contains_node_owned_workloads() -> None:
     )
     store = AgentStateStore(
         node_id=settings.node_id,
+        node_address=settings.advertised_host,
         agent_url=settings.agent_public_url,
         controller_url=settings.controller_base_url,
     )
@@ -56,6 +57,7 @@ async def test_local_state_only_contains_node_owned_workloads() -> None:
         WorkloadRecord(
             service=local_service,
             container_id="container-svc-local",
+            published_port=28000,
             container_ip="127.0.0.1",
             status=WorkloadStatus.running,
         )
@@ -64,6 +66,7 @@ async def test_local_state_only_contains_node_owned_workloads() -> None:
         WorkloadRecord(
             service=foreign_service,
             container_id="container-svc-foreign",
+            published_port=28001,
             container_ip="127.0.0.2",
             status=WorkloadStatus.running,
         )

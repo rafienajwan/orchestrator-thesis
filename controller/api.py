@@ -121,7 +121,12 @@ def build_router() -> APIRouter:
         report: AgentHeartbeatReport,
         store: StateStore = Depends(_get_store),
     ) -> AckResponse:
-        await store.upsert_node_heartbeat(report.node_id, report.agent_url, at=report.sent_at)
+        await store.upsert_node_heartbeat(
+            report.node_id,
+            report.agent_url,
+            node_address=report.node_address,
+            at=report.sent_at,
+        )
         return AckResponse(status="ok")
 
     @router.post("/internal/agent/resource-snapshot", response_model=AckResponse)

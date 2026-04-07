@@ -51,6 +51,7 @@ class CapturingAsyncClient:
         return FakeResponse(
             {
                 "node_id": "worker-1",
+                "node_address": "agent-1",
                 "workloads": {
                     "svc-1": {
                         "service": {
@@ -64,6 +65,7 @@ class CapturingAsyncClient:
                             "min_free_memory": 0.1,
                         },
                         "container_id": "container-1",
+                        "published_port": 28000,
                         "container_ip": "172.18.0.2",
                         "status": "running",
                     }

@@ -25,13 +25,14 @@ Expected:
 - root endpoint responds (not 404).
 - health endpoint returns healthy status.
 - nodes list contains worker-1 and worker-2 after telemetry warmup.
+- each node reports routable `node_address` (not `unknown`).
 
 ## 3. Deploy sample workload
 
 ```powershell
 curl.exe -X POST http://localhost:18080/api/services/deploy `
   -H "Content-Type: application/json" `
-  -d '{"service":{"service_id":"sample-app","image":"sample-app:latest","command":[],"env":{},"internal_port":8000,"health_endpoint":"/health","min_free_cpu":0.1,"min_free_memory":0.1}}'
+  -d '{"service":{"service_id":"sample-app","image":"sample-app:latest","command":[],"env":{},"internal_port":8000,"published_port":28000,"health_endpoint":"/health","min_free_cpu":0.1,"min_free_memory":0.1}}'
 ```
 
 Then inspect:
@@ -44,6 +45,8 @@ curl.exe http://localhost:18080/api/nodes
 Expected:
 - deploy event recorded.
 - service assigned to one node.
+- ingress target rendered as `node_address:published_port` (routable from controller).
+- `node_address` should be `agent-1`/`agent-2` in local compose, or worker private IP in VM deployment.
 
 Validate fixed workload endpoint:
 
@@ -55,6 +58,7 @@ curl.exe http://localhost:18080/
 Expected:
 - both routes hit active workload.
 - endpoint remains the same even after service restart/reschedule.
+- do not rely on direct container IP access for primary validation.
 
 ## 4. Restart and reschedule behavior
 

@@ -18,7 +18,8 @@ class DockerAdapterError(RuntimeError):
 @dataclass(frozen=True)
 class ContainerInfo:
     container_id: str
-    container_ip: str | None
+    container_ip: str | None = None
+    published_port: int | None = None
 
 
 class DockerAdapter(Protocol):
@@ -63,6 +64,7 @@ class DockerSdkAdapter(DockerAdapter):
                 return ContainerInfo(
                     container_id=_container_id(existing),
                     container_ip=_container_ip(existing, self._network_name),
+                    published_port=_published_port(existing, service.internal_port),
                 )
             try:
                 existing.remove(force=True)
@@ -84,6 +86,7 @@ class DockerSdkAdapter(DockerAdapter):
                 command=service.command or None,
                 detach=True,
                 environment=service.env or None,
+                ports={f"{service.internal_port}/tcp": service.published_port},
                 labels={
                     "orchestrator.service_id": service.service_id,
                     "orchestrator.node_id": self._node_id,
@@ -96,8 +99,17 @@ class DockerSdkAdapter(DockerAdapter):
             return ContainerInfo(
                 container_id=_container_id(container),
                 container_ip=_container_ip(container, self._network_name),
+                published_port=_published_port(container, service.internal_port),
             )
         except APIError as exc:
+            explanation = str(getattr(exc, "explanation", ""))
+            message = str(exc)
+            combined = f"{message} {explanation}".lower()
+            if "port is already allocated" in combined or "address already in use" in combined:
+                raise DockerAdapterError(
+                    f"Published port conflict for service={service.service_id} "
+                    f"on port={service.published_port}"
+                ) from exc
             raise DockerAdapterError(f"Failed to deploy service={service.service_id}") from exc
 
     def _stop_sync(self, service_id: str) -> None:
@@ -126,6 +138,7 @@ class DockerSdkAdapter(DockerAdapter):
         return ContainerInfo(
             container_id=_container_id(container),
             container_ip=_container_ip(container, self._network_name),
+            published_port=_published_port(container, 0),
         )
 
     def _find_container(self, service_id: str) -> Any | None:
@@ -197,3 +210,26 @@ def _container_id(container: Any) -> str:
     if not container_id:
         raise DockerAdapterError("Container ID is unavailable")
     return str(container_id)
+
+
+def _published_port(container: Any, internal_port: int) -> int | None:
+    container.reload()
+    container_attrs = cast(dict[str, Any], container.attrs)
+    network_settings = cast(dict[str, Any], container_attrs.get("NetworkSettings", {}))
+    ports = cast(dict[str, list[dict[str, str]] | None], network_settings.get("Ports", {}))
+
+    if internal_port > 0:
+        key = f"{internal_port}/tcp"
+        bindings = ports.get(key)
+        if bindings:
+            host_port = bindings[0].get("HostPort")
+            if host_port and host_port.isdigit():
+                return int(host_port)
+
+    for bindings in ports.values():
+        if not bindings:
+            continue
+        host_port = bindings[0].get("HostPort")
+        if host_port and host_port.isdigit():
+            return int(host_port)
+    return None

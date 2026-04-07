@@ -60,6 +60,7 @@ class ControllerReporter:
         report = AgentHeartbeatReport(
             node_id=self._settings.node_id,
             agent_url=self._settings.agent_public_url,
+            node_address=self._settings.advertised_host,
             sent_at=datetime.now(UTC),
         )
         await self._post("/api/internal/agent/heartbeat", report.model_dump(mode="json"))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import zlib
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -33,6 +34,7 @@ class AgentWorkloadManager(WorkloadManager):
         self._adapter = adapter
 
     async def deploy(self, service: ServiceSpec) -> ExecuteResponse:
+        service_with_port = await self._ensure_published_port(service)
         current = await self._store.get_workload(service.service_id)
         existing_local = await self._adapter.inspect(service.service_id)
         if (
@@ -49,10 +51,11 @@ class AgentWorkloadManager(WorkloadManager):
                 node_id=self._settings.node_id,
             )
 
-        container = await self._adapter.deploy(service)
+        container = await self._adapter.deploy(service_with_port)
         workload = WorkloadRecord(
-            service=service,
+            service=service_with_port,
             container_id=container.container_id,
+            published_port=container.published_port,
             container_ip=container.container_ip,
             status=WorkloadStatus.running,
             health_failures=0,
@@ -163,16 +166,25 @@ class AgentWorkloadManager(WorkloadManager):
             local_workloads[service_id] = workload.model_copy(
                 update={
                     "container_id": container.container_id,
+                    "published_port": container.published_port,
                     "container_ip": container.container_ip,
                 }
             )
         return state.model_copy(update={"workloads": local_workloads})
 
     async def _check_workload_health(self, workload: WorkloadRecord) -> bool:
-        if workload.container_ip is None:
+        if workload.published_port is not None:
+            url = (
+                f"http://127.0.0.1:{workload.published_port}"
+                f"{workload.service.health_endpoint}"
+            )
+        elif workload.container_ip is not None:
+            url = (
+                f"http://{workload.container_ip}:{workload.service.internal_port}"
+                f"{workload.service.health_endpoint}"
+            )
+        else:
             return False
-
-        url = f"http://{workload.container_ip}:{workload.service.internal_port}{workload.service.health_endpoint}"
         timeout = httpx.Timeout(self._settings.health_check_timeout_seconds)
         async with httpx.AsyncClient(timeout=timeout) as client:
             for _ in range(self._settings.health_check_retries):
@@ -183,3 +195,29 @@ class AgentWorkloadManager(WorkloadManager):
                 except httpx.HTTPError:
                     continue
         return False
+
+    async def _ensure_published_port(self, service: ServiceSpec) -> ServiceSpec:
+        if service.published_port is not None:
+            return service
+
+        current_workloads = await self._store.list_workloads()
+        used = {
+            record.published_port
+            for record in current_workloads
+            if record.published_port is not None and record.service.service_id != service.service_id
+        }
+
+        base = self._settings.published_port_base
+        maximum = self._settings.published_port_max
+        span = (maximum - base) + 1
+        if span <= 0:
+            raise ValueError("Invalid published port range configuration")
+
+        start = base + (zlib.crc32(service.service_id.encode("utf-8")) % span)
+        for offset in range(span):
+            candidate = base + ((start - base + offset) % span)
+            if candidate in used:
+                continue
+            return service.model_copy(update={"published_port": candidate})
+
+        raise ValueError("No available published port in configured range")

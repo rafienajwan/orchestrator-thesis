@@ -33,7 +33,11 @@ class StateStore(Protocol):
     async def acquire_service_lock(self, service_id: str) -> asyncio.Lock: ...
 
     async def upsert_node_heartbeat(
-        self, node_id: str, agent_url: str, at: datetime | None = None
+        self,
+        node_id: str,
+        agent_url: str,
+        node_address: str | None = None,
+        at: datetime | None = None,
     ) -> None: ...
 
     async def upsert_node_snapshot(self, node_id: str, snapshot: ResourceSnapshot) -> None: ...
@@ -111,26 +115,35 @@ class RedisStateStore(StateStore):
         return loaded
 
     async def upsert_node_heartbeat(
-        self, node_id: str, agent_url: str, at: datetime | None = None
+        self,
+        node_id: str,
+        agent_url: str,
+        node_address: str | None = None,
+        at: datetime | None = None,
     ) -> None:
         timestamp = at or datetime.now(UTC)
         key = self._k(f"node:{node_id}")
+        incoming_address = _normalize_node_address(node_address)
 
         try:
             existing_raw = await self._redis.get(key)
             if existing_raw:
                 existing = NodeState.model_validate(self._from_json(existing_raw))
+                routable_address = incoming_address or _normalize_node_address(existing.node_address) or "unknown"
                 state = existing.model_copy(
                     update={
                         "agent_url": agent_url,
+                        "node_address": routable_address,
                         "status": NodeStatus.healthy,
                         "last_heartbeat_at": timestamp,
                     }
                 )
             else:
+                routable_address = incoming_address or "unknown"
                 state = NodeState(
                     node_id=node_id,
                     agent_url=agent_url,
+                    node_address=routable_address,
                     status=NodeStatus.healthy,
                     last_heartbeat_at=timestamp,
                 )
@@ -392,22 +405,33 @@ class InMemoryStateStore(StateStore):
             return lock
 
     async def upsert_node_heartbeat(
-        self, node_id: str, agent_url: str, at: datetime | None = None
+        self,
+        node_id: str,
+        agent_url: str,
+        node_address: str | None = None,
+        at: datetime | None = None,
     ) -> None:
         timestamp = at or datetime.now(UTC)
+        incoming_address = _normalize_node_address(node_address)
         async with self._lock:
             current = self._nodes.get(node_id)
             if current is None:
+                routable_address = incoming_address or "unknown"
                 self._nodes[node_id] = NodeState(
                     node_id=node_id,
                     agent_url=agent_url,
+                    node_address=routable_address,
                     status=NodeStatus.healthy,
                     last_heartbeat_at=timestamp,
                 )
                 return
+            routable_address = (
+                incoming_address or _normalize_node_address(current.node_address) or "unknown"
+            )
             self._nodes[node_id] = current.model_copy(
                 update={
                     "agent_url": agent_url,
+                    "node_address": routable_address,
                     "status": NodeStatus.healthy,
                     "last_heartbeat_at": timestamp,
                 }
@@ -518,3 +542,13 @@ class InMemoryStateStore(StateStore):
     async def list_events(self, limit: int = 100) -> list[EventRecord]:
         async with self._lock:
             return list(self._events)[:limit]
+
+def _normalize_node_address(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.lower() == "unknown":
+        return None
+    return normalized

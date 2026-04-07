@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from agent.app.adapters.docker_adapter import ContainerInfo
+from agent.app.adapters.docker_adapter import ContainerInfo, DockerAdapterError
 from agent.app.core.config import AgentSettings
 from agent.app.core.models import WorkloadStatus
 from agent.app.main import create_app as create_agent_app
@@ -19,7 +19,9 @@ class FakeDockerAdapter:
     async def deploy(self, service: ServiceSpec) -> ContainerInfo:
         self.deploy_calls.append(service.service_id)
         return ContainerInfo(
-            container_id=f"container-{service.service_id}", container_ip="127.0.0.1"
+            container_id=f"container-{service.service_id}",
+            container_ip="127.0.0.1",
+            published_port=28000,
         )
 
     async def stop(self, service_id: str) -> None:
@@ -30,14 +32,26 @@ class FakeDockerAdapter:
 
     async def inspect(self, service_id: str) -> ContainerInfo | None:
         if service_id in self.deploy_calls:
-            return ContainerInfo(container_id=f"container-{service_id}", container_ip="127.0.0.1")
+            return ContainerInfo(
+                container_id=f"container-{service_id}",
+                container_ip="127.0.0.1",
+                published_port=28000,
+            )
         return None
+
+
+class PortConflictDockerAdapter(FakeDockerAdapter):
+    async def deploy(self, service: ServiceSpec) -> ContainerInfo:
+        raise DockerAdapterError(
+            f"Published port conflict for service={service.service_id} on port=28000"
+        )
 
 
 @pytest.mark.asyncio
 async def test_agent_execute_endpoints_and_local_state() -> None:
     settings = AgentSettings(
         node_id="node-a",
+        advertised_host="agent-a",
         agent_public_url="http://agent-a:8080",
         controller_base_url="http://controller:8000",
         telemetry_interval_seconds=60,
@@ -63,11 +77,13 @@ async def test_agent_execute_endpoints_and_local_state() -> None:
             health_response = await client.get("/health")
             assert health_response.status_code == 200
             assert health_response.json()["node_id"] == "node-a"
+            assert health_response.json()["node_address"] == "agent-a"
 
             local_state_response = await client.get("/local-state")
             assert local_state_response.status_code == 200
             state_json = local_state_response.json()
             assert state_json["workloads"]["svc-agent"]["status"] == WorkloadStatus.running.value
+            assert state_json["workloads"]["svc-agent"]["published_port"] == 28000
 
             stop_response = await client.post("/execute/stop", json={"service_id": "svc-agent"})
             assert stop_response.status_code == 200
@@ -82,3 +98,37 @@ async def test_agent_execute_endpoints_and_local_state() -> None:
             assert fake_docker.deploy_calls == ["svc-agent"]
             assert fake_docker.stop_calls == ["svc-agent"]
             assert fake_docker.restart_calls == ["svc-agent"]
+
+
+@pytest.mark.asyncio
+async def test_agent_deploy_returns_409_for_port_conflict() -> None:
+    settings = AgentSettings(
+        node_id="node-a",
+        advertised_host="agent-a",
+        agent_public_url="http://agent-a:8080",
+        controller_base_url="http://controller:8000",
+        telemetry_interval_seconds=60,
+        health_check_interval_seconds=60,
+    )
+    app = create_agent_app(
+        settings=settings,
+        docker_adapter=PortConflictDockerAdapter(),
+        start_telemetry=False,
+    )
+
+    async with app.router.lifespan_context(app):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://agent-a:8080"
+        ) as client:
+            service = ServiceSpec(
+                service_id="svc-port-conflict",
+                image="example/service:latest",
+                internal_port=8080,
+                published_port=28000,
+            )
+
+            response = await client.post(
+                "/execute/deploy", json={"service": service.model_dump(mode="json")}
+            )
+            assert response.status_code == 409
+            assert "Published port conflict" in response.json()["detail"]

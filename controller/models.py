@@ -53,6 +53,7 @@ class ResourceSnapshot(OrchestratorBaseModel):
 class NodeState(OrchestratorBaseModel):
     node_id: str = Field(min_length=1)
     agent_url: str = Field(min_length=1)
+    node_address: str = Field(default="unknown", min_length=1)
     status: NodeStatus = NodeStatus.healthy
     last_heartbeat_at: datetime = Field(default_factory=utc_now)
     last_resource_snapshot: ResourceSnapshot | None = None
@@ -68,6 +69,7 @@ class ServiceSpec(OrchestratorBaseModel):
     command: list[str] = Field(default_factory=list)
     env: dict[str, str] = Field(default_factory=dict)
     internal_port: int = Field(default=8000, ge=1, le=65535)
+    published_port: int | None = Field(default=None, ge=1, le=65535)
     health_endpoint: str = "/health"
     min_free_cpu: float = Field(default=0.10, ge=0.0, le=1.0)
     min_free_memory: float = Field(default=0.10, ge=0.0, le=1.0)
@@ -138,6 +140,7 @@ class EventRecord(OrchestratorBaseModel):
 class AgentHeartbeatReport(OrchestratorBaseModel):
     node_id: str
     agent_url: str
+    node_address: str = Field(default="unknown", min_length=1)
     sent_at: datetime = Field(default_factory=utc_now)
 
 

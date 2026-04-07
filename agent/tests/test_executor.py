@@ -4,6 +4,7 @@ import builtins
 from typing import Any, cast
 
 import pytest
+from docker.errors import APIError
 
 from agent.app.adapters.docker_adapter import ContainerInfo, DockerAdapterError, DockerSdkAdapter
 from controller.models import ServiceSpec
@@ -53,8 +54,11 @@ class FakeContainersManager:
     def __init__(self) -> None:
         self.created: list[FakeContainer] = []
         self.run_calls: list[dict[str, object]] = []
+        self.run_exception: Exception | None = None
 
     def run(self, image: str, **kwargs: object) -> FakeContainer:
+        if self.run_exception is not None:
+            raise self.run_exception
         self.run_calls.append({"image": image, **kwargs})
         labels = kwargs.get("labels", {})
         if not isinstance(labels, dict):
@@ -391,6 +395,30 @@ async def test_legacy_collision_on_scoped_name_fails_without_touching_existing()
 
     assert foreign.stopped is False
     assert foreign.removed is False
+
+
+@pytest.mark.asyncio
+async def test_deploy_port_collision_returns_clear_error() -> None:
+    client = FakeDockerClient()
+    client.containers.run_exception = APIError(
+        message="run failed",
+        explanation='driver failed programming external connectivity: Bind for 0.0.0.0:28000 failed: port is already allocated',
+    )
+    adapter = DockerSdkAdapter(
+        network_name="orchestrator-thesis-net",
+        node_id="worker-a",
+        docker_client=cast(Any, client),
+    )
+
+    with pytest.raises(DockerAdapterError, match="Published port conflict"):
+        await adapter.deploy(
+            ServiceSpec(
+                service_id="svc-port-conflict",
+                image="sample-app:latest",
+                internal_port=8000,
+                published_port=28000,
+            )
+        )
 
 
 def _matches_label_filter(container: FakeContainer, label_filter: str) -> bool:

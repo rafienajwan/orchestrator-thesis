@@ -38,6 +38,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     state_store = AgentStateStore(
         node_id=settings.node_id,
+        node_address=settings.advertised_host,
         agent_url=settings.agent_public_url,
         controller_url=settings.controller_base_url,
     )

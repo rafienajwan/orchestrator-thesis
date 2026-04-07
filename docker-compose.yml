@@ -42,6 +42,7 @@ services:
       dockerfile: Dockerfile.agent
     environment:
       NODE_ID: worker-1
+      ADVERTISED_HOST: agent-1
       AGENT_PUBLIC_URL: http://agent-1:8080
       CONTROLLER_BASE_URL: http://controller:8000
       DOCKER_NETWORK_NAME: orchestrator-thesis-net
@@ -51,6 +52,8 @@ services:
       HEALTH_CHECK_INTERVAL_SECONDS: ${AGENT_HEALTH_CHECK_INTERVAL_SECONDS:-10}
       HEALTH_CHECK_TIMEOUT_SECONDS: ${AGENT_HEALTH_CHECK_TIMEOUT_SECONDS:-2}
       HEALTH_CHECK_RETRIES: ${AGENT_HEALTH_CHECK_RETRIES:-3}
+      PUBLISHED_PORT_BASE: ${AGENT_PUBLISHED_PORT_BASE:-28000}
+      PUBLISHED_PORT_MAX: ${AGENT_PUBLISHED_PORT_MAX:-28999}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
@@ -64,6 +67,7 @@ services:
       dockerfile: Dockerfile.agent
     environment:
       NODE_ID: worker-2
+      ADVERTISED_HOST: agent-2
       AGENT_PUBLIC_URL: http://agent-2:8080
       CONTROLLER_BASE_URL: http://controller:8000
       DOCKER_NETWORK_NAME: orchestrator-thesis-net
@@ -73,6 +77,8 @@ services:
       HEALTH_CHECK_INTERVAL_SECONDS: ${AGENT_HEALTH_CHECK_INTERVAL_SECONDS:-10}
       HEALTH_CHECK_TIMEOUT_SECONDS: ${AGENT_HEALTH_CHECK_TIMEOUT_SECONDS:-2}
       HEALTH_CHECK_RETRIES: ${AGENT_HEALTH_CHECK_RETRIES:-3}
+      PUBLISHED_PORT_BASE: ${AGENT_PUBLISHED_PORT_BASE:-28000}
+      PUBLISHED_PORT_MAX: ${AGENT_PUBLISHED_PORT_MAX:-28999}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:

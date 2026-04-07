@@ -35,6 +35,7 @@ async def test_controller_reporter_posts_heartbeat_and_snapshot(
 ) -> None:
     settings = AgentSettings(
         node_id="worker-1",
+        advertised_host="worker-1.internal",
         agent_public_url="http://agent-1:8080",
         controller_base_url="http://controller:8000",
         health_check_timeout_seconds=2,
@@ -54,6 +55,7 @@ async def test_controller_reporter_posts_heartbeat_and_snapshot(
     assert calls[0][0] == "http://controller:8000/api/internal/agent/heartbeat"
     assert calls[0][1]["node_id"] == "worker-1"
     assert calls[0][1]["agent_url"] == "http://agent-1:8080"
+    assert calls[0][1]["node_address"] == "worker-1.internal"
     assert calls[1][0] == "http://controller:8000/api/internal/agent/resource-snapshot"
     assert calls[1][1]["node_id"] == "worker-1"
     snapshot = calls[1][1]["snapshot"]

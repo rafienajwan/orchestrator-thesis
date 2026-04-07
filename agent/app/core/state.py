@@ -8,9 +8,10 @@ from controller.models import ResourceSnapshot
 
 
 class AgentStateStore:
-    def __init__(self, node_id: str, agent_url: str, controller_url: str) -> None:
+    def __init__(self, node_id: str, node_address: str, agent_url: str, controller_url: str) -> None:
         self._state = AgentLocalState(
             node_id=node_id,
+            node_address=node_address,
             agent_url=agent_url,
             controller_url=controller_url,
         )

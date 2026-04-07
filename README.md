@@ -71,7 +71,7 @@ If host port 18080 is also occupied, set `NGINX_HOST_PORT` in `.env`.
 ```powershell
 curl.exe -X POST http://localhost:18080/api/services/deploy `
   -H "Content-Type: application/json" `
-  -d '{"service":{"service_id":"sample-app","image":"sample-app:latest","command":[],"env":{},"internal_port":8000,"health_endpoint":"/health","min_free_cpu":0.1,"min_free_memory":0.1}}'
+   -d '{"service":{"service_id":"sample-app","image":"sample-app:latest","command":[],"env":{},"internal_port":8000,"published_port":28000,"health_endpoint":"/health","min_free_cpu":0.1,"min_free_memory":0.1}}'
 ```
 
 ## Check Nodes
@@ -111,6 +111,28 @@ Client or k6 should always use the same workload endpoint:
    # Debug only
    curl http://<container_ip>:<internal_port>/health
    ```
+
+### Routable Endpoint Model (VM-ready)
+
+Ingress target is rendered as `node_address:published_port`:
+- `node_address` comes from agent `ADVERTISED_HOST`
+- `published_port` is host port published on worker VM
+
+For local compose:
+- `ADVERTISED_HOST` defaults to service names (`agent-1`, `agent-2`)
+- this is routable from controller/nginx because they share the same compose network
+- avoid `localhost` or container IP here; those are not stable cross-container ingress targets
+
+For VM deployment:
+- set `ADVERTISED_HOST` to each worker private IP (for example `10.x.x.x`)
+- ensure worker private IP is reachable from controller/nginx and published port range is allowed
+- keep client URL fixed (`/app/*`), ingress target changes internally during reschedule
+
+### Published Port Collision Behavior
+
+- If deploy requests a `published_port` already in use on the worker host, agent deploy returns HTTP `409`.
+- Controller keeps service in pending/failed path according to existing reconciliation flow until a valid routable endpoint is available.
+- Fix by choosing another `published_port` or widening `PUBLISHED_PORT_BASE`..`PUBLISHED_PORT_MAX` range.
 
 ## Controller→Agent Timeout Configuration
 

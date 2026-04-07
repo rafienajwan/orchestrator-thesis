@@ -42,15 +42,29 @@ class FakeAgentReader:
             raise AgentClientError("temporary read error")
         return self._states[agent_url]
 
-    def set_workload(self, agent_url: str, service_id: str, container_ip: str, internal_port: int) -> None:
-        spec = ServiceSpec(service_id=service_id, image="sample-app:latest", internal_port=internal_port)
+    def set_workload(
+        self,
+        agent_url: str,
+        service_id: str,
+        published_port: int,
+        internal_port: int,
+        node_address: str | None = None,
+    ) -> None:
+        spec = ServiceSpec(
+            service_id=service_id,
+            image="sample-app:latest",
+            internal_port=internal_port,
+            published_port=published_port,
+        )
         self._states[agent_url] = AgentLocalStateResponse(
             node_id=agent_url,
+            node_address=node_address or agent_url.replace("http://", "").split(":")[0],
             workloads={
                 service_id: AgentWorkloadState(
                     service=spec,
                     container_id=f"container-{service_id}",
-                    container_ip=container_ip,
+                    published_port=published_port,
+                    container_ip="172.18.0.5",
                     status="running",
                 )
             },
@@ -78,12 +92,12 @@ async def test_ingress_updates_on_initial_deploy(tmp_path: Path) -> None:
         ServiceObservedState(service_id="sample-app", status=DeploymentStatus.running, node_id="worker-1")
     )
     await store.set_placement(Placement(service_id="sample-app", node_id="worker-1"))
-    agent.set_workload("http://agent-1:8080", "sample-app", "172.18.0.5", 8000)
+    agent.set_workload("http://agent-1:8080", "sample-app", 28000, 8000)
 
     await manager.sync_service("sample-app", "deploy_succeeded")
 
     content = (tmp_path / "active.conf").read_text(encoding="utf-8")
-    assert "server 172.18.0.5:8000;" in content
+    assert "server agent-1:28000;" in content
     events = await store.list_events()
     assert events[0].event_type == EventType.ingress
 
@@ -109,18 +123,18 @@ async def test_ingress_updates_after_reschedule(tmp_path: Path) -> None:
     )
 
     await store.set_placement(Placement(service_id="sample-app", node_id="worker-1"))
-    agent.set_workload("http://agent-1:8080", "sample-app", "172.18.0.5", 8000)
+    agent.set_workload("http://agent-1:8080", "sample-app", 28000, 8000)
     await manager.sync_service("sample-app", "initial")
 
     await store.set_placement(Placement(service_id="sample-app", node_id="worker-2"))
     await store.set_service_observed(
         ServiceObservedState(service_id="sample-app", status=DeploymentStatus.running, node_id="worker-2")
     )
-    agent.set_workload("http://agent-2:8080", "sample-app", "172.18.0.9", 8000)
+    agent.set_workload("http://agent-2:8080", "sample-app", 28001, 8000)
     await manager.sync_service("sample-app", "rescheduled")
 
     content = (tmp_path / "active.conf").read_text(encoding="utf-8")
-    assert "server 172.18.0.9:8000;" in content
+    assert "server agent-2:28001;" in content
 
 
 @pytest.mark.asyncio
@@ -141,7 +155,7 @@ async def test_ingress_skips_reload_when_target_unchanged(tmp_path: Path) -> Non
         ServiceObservedState(service_id="sample-app", status=DeploymentStatus.running, node_id="worker-1")
     )
     await store.set_placement(Placement(service_id="sample-app", node_id="worker-1"))
-    agent.set_workload("http://agent-1:8080", "sample-app", "172.18.0.5", 8000)
+    agent.set_workload("http://agent-1:8080", "sample-app", 28000, 8000)
 
     await manager.sync_service("sample-app", "deploy")
     first = (tmp_path / "active.conf").read_text(encoding="utf-8")
@@ -193,7 +207,7 @@ async def test_ingress_keeps_existing_target_on_transient_agent_read_failure(tmp
         ServiceObservedState(service_id="sample-app", status=DeploymentStatus.running, node_id="worker-1")
     )
     await store.set_placement(Placement(service_id="sample-app", node_id="worker-1"))
-    agent.set_workload("http://agent-1:8080", "sample-app", "172.18.0.5", 8000)
+    agent.set_workload("http://agent-1:8080", "sample-app", 28000, 8000)
 
     await manager.sync_service("sample-app", "initial")
     baseline = (tmp_path / "active.conf").read_text(encoding="utf-8")
@@ -219,3 +233,82 @@ async def test_ingress_disabled_skips_write(tmp_path: Path) -> None:
 
     await manager.sync_service("sample-app", "disabled")
     assert not (tmp_path / "active.conf").exists()
+
+
+@pytest.mark.asyncio
+async def test_ingress_clears_target_when_local_state_missing_published_port(tmp_path: Path) -> None:
+    store = InMemoryStateStore()
+    agent = FakeAgentReader()
+    settings = ControllerSettings(
+        ingress_enabled=True,
+        ingress_active_service_id="sample-app",
+        ingress_upstream_file_path=str(tmp_path / "active.conf"),
+        nginx_reload_enabled=False,
+    )
+    manager = IngressManager(settings=settings, store=store, agent_client=agent)
+
+    await store.upsert_node_heartbeat(
+        "worker-1", "http://agent-1:8080", node_address="10.10.0.11"
+    )
+    await store.upsert_node_snapshot("worker-1", ResourceSnapshot(cpu_utilization=0.2, memory_utilization=0.2))
+    await store.set_service_observed(
+        ServiceObservedState(service_id="sample-app", status=DeploymentStatus.running, node_id="worker-1")
+    )
+    await store.set_placement(Placement(service_id="sample-app", node_id="worker-1"))
+    agent.set_workload("http://agent-1:8080", "sample-app", 28000, 8000)
+
+    await manager.sync_service("sample-app", "initial")
+    baseline = (tmp_path / "active.conf").read_text(encoding="utf-8")
+    assert "server agent-1:28000;" in baseline
+
+    spec = ServiceSpec(service_id="sample-app", image="sample-app:latest", internal_port=8000)
+    agent._states["http://agent-1:8080"] = AgentLocalStateResponse(
+        node_id="worker-1",
+        node_address="10.10.0.11",
+        workloads={
+            "sample-app": AgentWorkloadState(
+                service=spec,
+                container_id="container-sample-app",
+                published_port=None,
+                container_ip="172.18.0.5",
+                status="running",
+            )
+        },
+    )
+
+    await manager.sync_service("sample-app", "missing_published_port")
+    after = (tmp_path / "active.conf").read_text(encoding="utf-8")
+    assert "server " not in after
+
+
+@pytest.mark.asyncio
+async def test_ingress_does_not_use_container_ip_when_node_address_missing(tmp_path: Path) -> None:
+    store = InMemoryStateStore()
+    agent = FakeAgentReader()
+    settings = ControllerSettings(
+        ingress_enabled=True,
+        ingress_active_service_id="sample-app",
+        ingress_upstream_file_path=str(tmp_path / "active.conf"),
+        nginx_reload_enabled=False,
+    )
+    manager = IngressManager(settings=settings, store=store, agent_client=agent)
+
+    await store.upsert_node_heartbeat("worker-1", "http://agent-1:8080", node_address="unknown")
+    await store.upsert_node_snapshot("worker-1", ResourceSnapshot(cpu_utilization=0.2, memory_utilization=0.2))
+    await store.set_service_observed(
+        ServiceObservedState(service_id="sample-app", status=DeploymentStatus.running, node_id="worker-1")
+    )
+    await store.set_placement(Placement(service_id="sample-app", node_id="worker-1"))
+    agent.set_workload(
+        "http://agent-1:8080",
+        "sample-app",
+        28000,
+        8000,
+        node_address="unknown",
+    )
+
+    await manager.sync_service("sample-app", "missing_node_address")
+
+    content = (tmp_path / "active.conf").read_text(encoding="utf-8")
+    assert "server " not in content
+    assert "172.18.0.5" not in content

@@ -90,6 +90,7 @@ class IngressManager(IngressUpdater):
         if node is None:
             return _SyncDecision(should_update=True, target=None)
 
+        read_succeeded = False
         for _ in range(3):
             try:
                 local_state = await self._agent_client.get_local_state(node.agent_url)
@@ -97,18 +98,28 @@ class IngressManager(IngressUpdater):
                 await asyncio.sleep(0.2)
                 continue
 
+            read_succeeded = True
+
             workload = local_state.workloads.get(service_id)
-            if workload is None or workload.container_ip is None:
+            if workload is None or workload.published_port is None:
+                await asyncio.sleep(0.2)
+                continue
+
+            node_address = _first_valid_node_address(local_state.node_address, node.node_address)
+            if node_address is None:
                 await asyncio.sleep(0.2)
                 continue
 
             return _SyncDecision(
                 should_update=True,
-                target=f"{workload.container_ip}:{workload.service.internal_port}",
+                target=f"{node_address}:{workload.published_port}",
             )
 
-        # Keep current target when active placement exists but agent read is transiently unavailable.
-        return _SyncDecision(should_update=False, target=None)
+        # Keep current target only when we cannot read local state at all (transient connectivity).
+        # If local state can be read but routable metadata is missing, mark ingress unavailable.
+        if not read_succeeded:
+            return _SyncDecision(should_update=False, target=None)
+        return _SyncDecision(should_update=True, target=None)
 
     async def _write_upstream_config(self, target: str | None) -> bool:
         content = self._render_upstream_file(target)
@@ -159,3 +170,22 @@ class _SyncDecision:
     def __init__(self, should_update: bool, target: str | None) -> None:
         self.should_update = should_update
         self.target = target
+
+
+def _normalize_node_address(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip()
+    if not normalized:
+        return None
+    if normalized.lower() == "unknown":
+        return None
+    return normalized
+
+
+def _first_valid_node_address(*candidates: str | None) -> str | None:
+    for candidate in candidates:
+        normalized = _normalize_node_address(candidate)
+        if normalized is not None:
+            return normalized
+    return None

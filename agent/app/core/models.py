@@ -29,6 +29,8 @@ class ExecuteResponse(AgentBaseModel):
 class WorkloadRecord(AgentBaseModel):
     service: ServiceSpec
     container_id: str | None = None
+    published_port: int | None = None
+    # Debug-only field; ingress should not depend on container bridge IP.
     container_ip: str | None = None
     status: WorkloadStatus = WorkloadStatus.pending
     health_failures: int = Field(default=0, ge=0)
@@ -40,6 +42,7 @@ class WorkloadRecord(AgentBaseModel):
 
 class AgentLocalState(AgentBaseModel):
     node_id: str
+    node_address: str
     agent_url: str
     controller_url: str
     started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))

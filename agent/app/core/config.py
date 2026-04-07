@@ -14,6 +14,7 @@ class AgentSettings(BaseSettings):
 
     node_id: str = Field(default="node-a", min_length=1)
     agent_public_url: str = Field(default="http://agent-a:8080", min_length=1)
+    advertised_host: str = Field(default="agent-a", min_length=1)
     controller_base_url: str = Field(default="http://controller:8000", min_length=1)
 
     agent_host: str = "0.0.0.0"
@@ -28,6 +29,8 @@ class AgentSettings(BaseSettings):
     docker_network_name: str = Field(default="orchestrator-thesis-net", min_length=1)
     docker_base_url: str | None = None
     container_stop_timeout_seconds: int = Field(default=10, ge=1, le=120)
+    published_port_base: int = Field(default=20000, ge=1024, le=65000)
+    published_port_max: int = Field(default=20999, ge=1024, le=65535)
 
 
 @lru_cache(maxsize=1)

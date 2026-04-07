@@ -27,6 +27,8 @@ class AgentWorkloadState(BaseModel):
 
     service: ServiceSpec
     container_id: str | None = None
+    published_port: int | None = None
+    # Debug-only field; ingress should use node_address:published_port.
     container_ip: str | None = None
     status: str
 
@@ -35,6 +37,7 @@ class AgentLocalStateResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     node_id: str
+    node_address: str
     workloads: dict[str, AgentWorkloadState]
 
 

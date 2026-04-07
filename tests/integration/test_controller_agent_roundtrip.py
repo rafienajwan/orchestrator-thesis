@@ -28,7 +28,9 @@ class FakeDockerAdapter:
     async def deploy(self, service: ServiceSpec) -> ContainerInfo:
         self.deploy_calls.append(service.service_id)
         return ContainerInfo(
-            container_id=f"container-{service.service_id}", container_ip="127.0.0.1"
+            container_id=f"container-{service.service_id}",
+            container_ip="127.0.0.1",
+            published_port=28000,
         )
 
     async def stop(self, service_id: str) -> None:
@@ -39,7 +41,11 @@ class FakeDockerAdapter:
 
     async def inspect(self, service_id: str) -> ContainerInfo | None:
         if service_id in self.deploy_calls:
-            return ContainerInfo(container_id=f"container-{service_id}", container_ip="127.0.0.1")
+            return ContainerInfo(
+                container_id=f"container-{service_id}",
+                container_ip="127.0.0.1",
+                published_port=28000,
+            )
         return None
 
 
@@ -68,6 +74,7 @@ async def test_controller_deploys_service_to_agent_and_agent_tracks_state() -> N
     controller_store = InMemoryStateStore()
     agent_settings = AgentSettings(
         node_id="node-a",
+        advertised_host="node-a.internal",
         agent_public_url="http://agent-a:8080",
         controller_base_url="http://controller:8000",
         telemetry_interval_seconds=60,
