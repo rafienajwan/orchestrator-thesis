@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import zlib
 from datetime import UTC, datetime
 from typing import Protocol
@@ -11,6 +12,8 @@ from agent.app.core.config import AgentSettings
 from agent.app.core.models import AgentLocalState, ExecuteResponse, WorkloadRecord, WorkloadStatus
 from agent.app.core.state import AgentStateStore
 from controller.models import AgentHealthReport, ServiceSpec
+
+logger = logging.getLogger(__name__)
 
 
 class WorkloadManager(Protocol):
@@ -125,7 +128,22 @@ class AgentWorkloadManager(WorkloadManager):
         for workload in workloads:
             if workload.status not in {WorkloadStatus.running, WorkloadStatus.unhealthy}:
                 continue
-            is_healthy = await self._check_workload_health(workload)
+            health_resolution = await self._resolve_internal_health_url(workload)
+            if health_resolution is None:
+                logger.warning(
+                    "Skipping health check because no internal container endpoint is available",
+                    extra={
+                        "service_id": workload.service.service_id,
+                        "node_id": self._settings.node_id,
+                    },
+                )
+                continue
+
+            health_url, resolved_container_ip = health_resolution
+            if resolved_container_ip is not None and resolved_container_ip != workload.container_ip:
+                workload = workload.model_copy(update={"container_ip": resolved_container_ip})
+
+            is_healthy = await self._check_workload_health(workload, health_url)
             if is_healthy:
                 updated = workload.model_copy(
                     update={
@@ -172,19 +190,7 @@ class AgentWorkloadManager(WorkloadManager):
             )
         return state.model_copy(update={"workloads": local_workloads})
 
-    async def _check_workload_health(self, workload: WorkloadRecord) -> bool:
-        if workload.published_port is not None:
-            url = (
-                f"http://127.0.0.1:{workload.published_port}"
-                f"{workload.service.health_endpoint}"
-            )
-        elif workload.container_ip is not None:
-            url = (
-                f"http://{workload.container_ip}:{workload.service.internal_port}"
-                f"{workload.service.health_endpoint}"
-            )
-        else:
-            return False
+    async def _check_workload_health(self, workload: WorkloadRecord, url: str) -> bool:
         timeout = httpx.Timeout(self._settings.health_check_timeout_seconds)
         async with httpx.AsyncClient(timeout=timeout) as client:
             for _ in range(self._settings.health_check_retries):
@@ -192,9 +198,39 @@ class AgentWorkloadManager(WorkloadManager):
                     response = await client.get(url)
                     if 200 <= response.status_code < 300:
                         return True
-                except httpx.HTTPError:
+                except httpx.HTTPError as exc:
+                    logger.debug(
+                        "Health check attempt failed",
+                        extra={
+                            "service_id": workload.service.service_id,
+                            "node_id": self._settings.node_id,
+                            "url": url,
+                            "error": str(exc),
+                        },
+                    )
                     continue
         return False
+
+    async def _resolve_internal_health_url(
+        self, workload: WorkloadRecord
+    ) -> tuple[str, str | None] | None:
+        container_ip = workload.container_ip
+        if container_ip is None:
+            refreshed = await self._adapter.inspect(workload.service.service_id)
+            if refreshed is not None:
+                container_ip = refreshed.container_ip
+                if container_ip is not None:
+                    await self._store.upsert_workload(
+                        workload.model_copy(update={"container_ip": container_ip})
+                    )
+
+        if container_ip is None:
+            return None
+
+        return (
+            f"http://{container_ip}:{workload.service.internal_port}{workload.service.health_endpoint}",
+            container_ip,
+        )
 
     async def _ensure_published_port(self, service: ServiceSpec) -> ServiceSpec:
         if service.published_port is not None:

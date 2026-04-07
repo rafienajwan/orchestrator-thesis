@@ -93,6 +93,11 @@ Control-plane and workload ingress are now separated:
 - `http://localhost:18080/app/*` routes to active workload
 - `http://localhost:18080/` also routes to active workload root
 
+Agent health checks are separate from client ingress:
+- ingress uses `node_address:published_port`
+- agent health checks use the workload's internal container endpoint, typically `container_ip:internal_port`
+- this avoids treating the Docker host published port as a container-local health target
+
 Client or k6 should always use the same workload endpoint:
 1. Access root endpoint:
    ```powershell

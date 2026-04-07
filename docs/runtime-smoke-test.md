@@ -49,6 +49,7 @@ Expected:
 - ingress target rendered as `node_address:published_port` (routable from controller).
 - in local compose, ingress target should resolve to `host.docker.internal:<published_port>`.
 - in VM deployment, ingress target should resolve to `<worker-private-ip>:<published_port>`.
+- agent-side health checks use the internal container endpoint, typically `container_ip:internal_port`.
 
 Validate fixed workload endpoint:
 

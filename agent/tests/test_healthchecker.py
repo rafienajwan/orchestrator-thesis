@@ -14,6 +14,9 @@ from controller.models import ServiceSpec
 
 
 class FakeDockerAdapter(DockerAdapter):
+    def __init__(self) -> None:
+        self.inspect_map: dict[str, ContainerInfo | None] = {}
+
     async def deploy(self, service: ServiceSpec) -> ContainerInfo:
         return ContainerInfo(
             container_id=f"container-{service.service_id}", container_ip="127.0.0.1"
@@ -26,7 +29,7 @@ class FakeDockerAdapter(DockerAdapter):
         return None
 
     async def inspect(self, service_id: str) -> ContainerInfo | None:
-        return None
+        return self.inspect_map.get(service_id)
 
 
 class FakeResponse:
@@ -52,6 +55,22 @@ class FlakyAsyncClient:
         if self._calls["count"] < 3:
             raise httpx.ConnectError("boom", request=httpx.Request("GET", url))
         return FakeResponse(200)
+
+
+class RecordingAsyncClient:
+    def __init__(self, timeout: Any, urls: list[str], status_code: int = 200) -> None:
+        self._urls = urls
+        self._status_code = status_code
+
+    async def __aenter__(self) -> RecordingAsyncClient:
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+        return None
+
+    async def get(self, url: str) -> FakeResponse:
+        self._urls.append(url)
+        return FakeResponse(self._status_code)
 
 
 def _build_client(timeout: object, calls: dict[str, int]) -> FlakyAsyncClient:
@@ -81,7 +100,7 @@ async def test_health_checker_retries_until_success(monkeypatch: pytest.MonkeyPa
             service=service,
             container_id="container-1",
             published_port=28000,
-            container_ip="127.0.0.1",
+            container_ip="172.18.0.10",
             status=WorkloadStatus.running,
         )
     )
@@ -103,4 +122,146 @@ async def test_health_checker_retries_until_success(monkeypatch: pytest.MonkeyPa
     updated = await store.get_workload("svc-1")
     assert updated is not None
     assert updated.status == WorkloadStatus.running
+    assert updated.health_failures == 0
+
+
+@pytest.mark.asyncio
+async def test_health_checker_uses_container_ip_not_published_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = AgentSettings(
+        node_id="worker-1",
+        agent_public_url="http://agent-1:8080",
+        controller_base_url="http://controller:8000",
+        health_check_timeout_seconds=2,
+        health_check_retries=1,
+    )
+    store = AgentStateStore(
+        node_id=settings.node_id,
+        node_address=settings.advertised_host,
+        agent_url=settings.agent_public_url,
+        controller_url=settings.controller_base_url,
+    )
+    service = ServiceSpec(
+        service_id="svc-2", image="sample-app:latest", internal_port=8000, health_endpoint="/health"
+    )
+    await store.upsert_workload(
+        WorkloadRecord(
+            service=service,
+            container_id="container-2",
+            published_port=28000,
+            container_ip="172.18.0.11",
+            status=WorkloadStatus.running,
+        )
+    )
+
+    urls: list[str] = []
+    monkeypatch.setattr(
+        "agent.app.services.workload_manager.httpx.AsyncClient",
+        lambda timeout: RecordingAsyncClient(timeout=timeout, urls=urls),
+    )
+
+    manager = AgentWorkloadManager(settings=settings, store=store, adapter=FakeDockerAdapter())
+    reports = await manager.health_check_all()
+
+    assert urls == ["http://172.18.0.11:8000/health"]
+    assert all("127.0.0.1:28000" not in url for url in urls)
+    assert len(reports) == 1
+    assert reports[0].healthy is True
+
+
+@pytest.mark.asyncio
+async def test_health_checker_refreshes_missing_container_ip_via_inspect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = AgentSettings(
+        node_id="worker-1",
+        agent_public_url="http://agent-1:8080",
+        controller_base_url="http://controller:8000",
+        health_check_timeout_seconds=2,
+        health_check_retries=1,
+    )
+    store = AgentStateStore(
+        node_id=settings.node_id,
+        node_address=settings.advertised_host,
+        agent_url=settings.agent_public_url,
+        controller_url=settings.controller_base_url,
+    )
+    service = ServiceSpec(
+        service_id="svc-3", image="sample-app:latest", internal_port=8000, health_endpoint="/health"
+    )
+    await store.upsert_workload(
+        WorkloadRecord(
+            service=service,
+            container_id="container-3",
+            published_port=28000,
+            status=WorkloadStatus.running,
+        )
+    )
+
+    adapter = FakeDockerAdapter()
+    adapter.inspect_map["svc-3"] = ContainerInfo(
+        container_id="container-3",
+        container_ip="172.18.0.12",
+        published_port=28000,
+    )
+
+    urls: list[str] = []
+    monkeypatch.setattr(
+        "agent.app.services.workload_manager.httpx.AsyncClient",
+        lambda timeout: RecordingAsyncClient(timeout=timeout, urls=urls),
+    )
+
+    manager = AgentWorkloadManager(settings=settings, store=store, adapter=adapter)
+    reports = await manager.health_check_all()
+
+    assert urls == ["http://172.18.0.12:8000/health"]
+    updated = await store.get_workload("svc-3")
+    assert updated is not None
+    assert updated.container_ip == "172.18.0.12"
+    assert len(reports) == 1
+
+
+@pytest.mark.asyncio
+async def test_health_checker_skips_when_internal_ip_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = AgentSettings(
+        node_id="worker-1",
+        agent_public_url="http://agent-1:8080",
+        controller_base_url="http://controller:8000",
+        health_check_timeout_seconds=2,
+        health_check_retries=1,
+    )
+    store = AgentStateStore(
+        node_id=settings.node_id,
+        node_address=settings.advertised_host,
+        agent_url=settings.agent_public_url,
+        controller_url=settings.controller_base_url,
+    )
+    service = ServiceSpec(
+        service_id="svc-4", image="sample-app:latest", internal_port=8000, health_endpoint="/health"
+    )
+    await store.upsert_workload(
+        WorkloadRecord(
+            service=service,
+            container_id="container-4",
+            published_port=28000,
+            status=WorkloadStatus.running,
+        )
+    )
+
+    urls: list[str] = []
+    monkeypatch.setattr(
+        "agent.app.services.workload_manager.httpx.AsyncClient",
+        lambda timeout: RecordingAsyncClient(timeout=timeout, urls=urls),
+    )
+
+    manager = AgentWorkloadManager(settings=settings, store=store, adapter=FakeDockerAdapter())
+    reports = await manager.health_check_all()
+
+    assert urls == []
+    assert reports == []
+    updated = await store.get_workload("svc-4")
+    assert updated is not None
     assert updated.health_failures == 0
