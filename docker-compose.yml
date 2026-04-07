@@ -1,0 +1,100 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    networks:
+      - orchestrator-net
+
+  controller:
+    build:
+      context: .
+      dockerfile: Dockerfile.controller
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-orchestrator}
+      CONTROLLER_LOG_LEVEL: ${CONTROLLER_LOG_LEVEL:-INFO}
+      HEALTH_CHECK_TIMEOUT_SECONDS: ${CONTROLLER_HEALTH_CHECK_TIMEOUT_SECONDS:-2}
+      HEARTBEAT_TIMEOUT_SECONDS: ${CONTROLLER_HEARTBEAT_TIMEOUT_SECONDS:-30}
+      RECONCILIATION_INTERVAL_SECONDS: ${CONTROLLER_RECONCILIATION_INTERVAL_SECONDS:-15}
+      AGENT_DEPLOY_TIMEOUT_SECONDS: ${CONTROLLER_AGENT_DEPLOY_TIMEOUT_SECONDS:-60}
+      AGENT_COMMAND_TIMEOUT_SECONDS: ${CONTROLLER_AGENT_COMMAND_TIMEOUT_SECONDS:-15}
+      AGENT_READ_TIMEOUT_SECONDS: ${CONTROLLER_AGENT_READ_TIMEOUT_SECONDS:-5}
+      MAX_RESTART_ATTEMPTS: ${CONTROLLER_MAX_RESTART_ATTEMPTS:-2}
+      COOLDOWN_INTERVALS_AFTER_RECOVERY: ${CONTROLLER_COOLDOWN_INTERVALS_AFTER_RECOVERY:-1}
+      EVENT_LOG_MAX_ITEMS: ${CONTROLLER_EVENT_LOG_MAX_ITEMS:-500}
+    depends_on:
+      - redis
+    networks:
+      - orchestrator-net
+
+  agent-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    environment:
+      NODE_ID: worker-1
+      AGENT_PUBLIC_URL: http://agent-1:8080
+      CONTROLLER_BASE_URL: http://controller:8000
+      DOCKER_NETWORK_NAME: orchestrator-thesis-net
+      DOCKER_HOST: unix:///var/run/docker.sock
+      LOG_LEVEL: ${AGENT_LOG_LEVEL:-INFO}
+      TELEMETRY_INTERVAL_SECONDS: ${AGENT_TELEMETRY_INTERVAL_SECONDS:-5}
+      HEALTH_CHECK_INTERVAL_SECONDS: ${AGENT_HEALTH_CHECK_INTERVAL_SECONDS:-10}
+      HEALTH_CHECK_TIMEOUT_SECONDS: ${AGENT_HEALTH_CHECK_TIMEOUT_SECONDS:-2}
+      HEALTH_CHECK_RETRIES: ${AGENT_HEALTH_CHECK_RETRIES:-3}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - controller
+    networks:
+      - orchestrator-net
+
+  agent-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.agent
+    environment:
+      NODE_ID: worker-2
+      AGENT_PUBLIC_URL: http://agent-2:8080
+      CONTROLLER_BASE_URL: http://controller:8000
+      DOCKER_NETWORK_NAME: orchestrator-thesis-net
+      DOCKER_HOST: unix:///var/run/docker.sock
+      LOG_LEVEL: ${AGENT_LOG_LEVEL:-INFO}
+      TELEMETRY_INTERVAL_SECONDS: ${AGENT_TELEMETRY_INTERVAL_SECONDS:-5}
+      HEALTH_CHECK_INTERVAL_SECONDS: ${AGENT_HEALTH_CHECK_INTERVAL_SECONDS:-10}
+      HEALTH_CHECK_TIMEOUT_SECONDS: ${AGENT_HEALTH_CHECK_TIMEOUT_SECONDS:-2}
+      HEALTH_CHECK_RETRIES: ${AGENT_HEALTH_CHECK_RETRIES:-3}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - controller
+    networks:
+      - orchestrator-net
+
+  nginx:
+    image: nginx:1.27-alpine
+    depends_on:
+      - controller
+    ports:
+      - "${NGINX_HOST_PORT:-18080}:80"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - orchestrator-net
+
+  sample-app:
+    build:
+      context: ./sample_app
+      dockerfile: Dockerfile
+    image: sample-app:latest
+    profiles:
+      - sample
+    ports:
+      - "${SAMPLE_APP_HOST_PORT:-9000}:8000"
+    networks:
+      - orchestrator-net
+
+networks:
+  orchestrator-net:
+    name: orchestrator-thesis-net
+    driver: bridge
