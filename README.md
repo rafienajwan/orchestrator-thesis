@@ -86,6 +86,56 @@ curl.exe http://localhost:18080/nodes
 curl.exe http://localhost:18080/events
 ```
 
+## Accessing Deployed Services
+
+Deployed workloads are NOT directly accessible via the public Nginx entry point (http://localhost:18080).
+This is by design: controller owns service placement decisions, agents own workload execution.
+
+To access deployed service:
+1. Query nodes to see agent assignments:
+   ```powershell
+   curl.exe http://localhost:18080/nodes
+   ```
+
+2. Query service details to find assigned node and container IP:
+   ```powershell
+   curl.exe http://localhost:18080/services/<service_id>
+   ```
+
+3. Access workload directly on internal network via container IP (for prototype):
+   ```bash
+   # Inside compose network or from agent node
+   curl http://<container_ip>:<internal_port>/health
+   ```
+
+For production scenarios, implement workload ingress via dedicated service discovery or agent-scoped reverse proxy.
+
+## Controller→Agent Timeout Configuration
+
+Timeouts are explicitly separated by operation type:
+- `AGENT_DEPLOY_TIMEOUT_SECONDS` (default 60s): Image pull + startup time
+- `AGENT_COMMAND_TIMEOUT_SECONDS` (default 15s): Stop/restart commands (faster)
+- `AGENT_READ_TIMEOUT_SECONDS` (default 5s): Lightweight controller reads (reserved for future)
+
+### Node Failure Detection Latency
+
+Node unreachable detection relies on heartbeat timeout + reconciliation grace window:
+- Heartbeat timeout: 30 seconds (node must send heartbeat every 5 seconds)
+- Reconciliation grace window: +15 seconds margin for network variance
+- **Total detection latency: ~45 seconds**
+
+This is acceptable for academic prototype. Production deployments should tune based on SLA:
+- Tighter SLA: reduce `heartbeat_timeout_seconds` to 10-20s
+- Loose SLA: current 30s sufficient
+
+## Test-Only Endpoints
+
+Sample app includes POST endpoints for smoke test health failure injection:
+- `POST /health/fail`: Simulate health check failure
+- `POST /health/recover`: Restore healthy state
+
+These are NOT part of production workload contract. Do not include in final deployment images.
+
 ## Final Archive (Clean Zip)
 
 Generate a clean project archive that excludes local cache and virtual environment artifacts:

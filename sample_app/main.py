@@ -57,6 +57,10 @@ async def health() -> SampleResponse:
 
 @app.post("/health/fail", response_model=SampleResponse)
 async def fail_health() -> SampleResponse:
+    """Test-only endpoint: trigger health check failures for smoke test.
+    Deployed workload will respond with HTTP 503 to incoming health checks.
+    Used to simulate and verify controller self-healing restart logic.
+    """
     state = app.state.sample_state
     state.mark_unhealthy()
     return SampleResponse(service=state.name, status="unhealthy")
@@ -64,6 +68,9 @@ async def fail_health() -> SampleResponse:
 
 @app.post("/health/recover", response_model=SampleResponse)
 async def recover_health() -> SampleResponse:
+    """Test-only endpoint: recover from health failure.
+    Used after smoke test to restore service to healthy state.
+    """
     state = app.state.sample_state
     state.mark_healthy()
     return SampleResponse(service=state.name, status="healthy")
