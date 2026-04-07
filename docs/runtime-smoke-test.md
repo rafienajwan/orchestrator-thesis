@@ -26,6 +26,7 @@ Expected:
 - health endpoint returns healthy status.
 - nodes list contains worker-1 and worker-2 after telemetry warmup.
 - each node reports routable `node_address` (not `unknown`).
+- in local compose, `node_address` should be `host.docker.internal` (single-host simulation).
 
 ## 3. Deploy sample workload
 
@@ -46,7 +47,8 @@ Expected:
 - deploy event recorded.
 - service assigned to one node.
 - ingress target rendered as `node_address:published_port` (routable from controller).
-- `node_address` should be `agent-1`/`agent-2` in local compose, or worker private IP in VM deployment.
+- in local compose, ingress target should resolve to `host.docker.internal:<published_port>`.
+- in VM deployment, ingress target should resolve to `<worker-private-ip>:<published_port>`.
 
 Validate fixed workload endpoint:
 
@@ -59,6 +61,10 @@ Expected:
 - both routes hit active workload.
 - endpoint remains the same even after service restart/reschedule.
 - do not rely on direct container IP access for primary validation.
+
+Note:
+- Docker Compose runtime here is a one-host simulation. Published ports from both workers share the same host network namespace.
+- Configure non-overlapping per-agent published-port ranges to avoid collision.
 
 ## 4. Restart and reschedule behavior
 

@@ -119,14 +119,20 @@ Ingress target is rendered as `node_address:published_port`:
 - `published_port` is host port published on worker VM
 
 For local compose:
-- `ADVERTISED_HOST` defaults to service names (`agent-1`, `agent-2`)
-- this is routable from controller/nginx because they share the same compose network
-- avoid `localhost` or container IP here; those are not stable cross-container ingress targets
+- local stack runs on one Docker host, so workload `published_port` is opened on host network
+- `ADVERTISED_HOST` must point to Docker host gateway (`host.docker.internal`), not agent service name
+- compose sets `extra_hosts: host.docker.internal:host-gateway` on controller and nginx so ingress target is reachable
+- each agent uses different published-port range to avoid single-host port collision (`agent-1`: 28000-28499, `agent-2`: 28500-28999)
 
 For VM deployment:
 - set `ADVERTISED_HOST` to each worker private IP (for example `10.x.x.x`)
 - ensure worker private IP is reachable from controller/nginx and published port range is allowed
 - keep client URL fixed (`/app/*`), ingress target changes internally during reschedule
+
+Local compose is a one-host simulation of the same routing contract:
+- local compose target example: `host.docker.internal:28023`
+- VM target example: `10.10.2.14:28023`
+- both are represented identically by ingress as `node_address:published_port`
 
 ### Published Port Collision Behavior
 
