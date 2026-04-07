@@ -1,0 +1,96 @@
+# Runtime Smoke Test (Docker Compose)
+
+This checklist validates runtime behavior that cannot be fully proven by unit tests alone.
+
+## 1. Start stack
+
+```powershell
+docker compose up -d --build
+docker compose ps
+```
+
+Expected:
+- redis, controller, agent-1, agent-2, nginx are Up.
+- public endpoint available at http://localhost:18080.
+
+## 2. Basic API reachability
+
+```powershell
+curl.exe http://localhost:18080/
+curl.exe http://localhost:18080/health
+curl.exe http://localhost:18080/nodes
+```
+
+Expected:
+- root endpoint responds (not 404).
+- health endpoint returns healthy status.
+- nodes list contains worker-1 and worker-2 after telemetry warmup.
+
+## 3. Deploy sample workload
+
+```powershell
+curl.exe -X POST http://localhost:18080/services/deploy `
+  -H "Content-Type: application/json" `
+  -d '{"service":{"service_id":"sample-app","image":"sample-app:latest","command":[],"env":{},"internal_port":8000,"health_endpoint":"/health","min_free_cpu":0.1,"min_free_memory":0.1}}'
+```
+
+Then inspect:
+
+```powershell
+curl.exe http://localhost:18080/events
+curl.exe http://localhost:18080/nodes
+```
+
+Expected:
+- deploy event recorded.
+- service assigned to one node.
+
+## 4. Restart and reschedule behavior
+
+Restart the service through API (if endpoint exposed by your current routes) or force container restart on owning node and observe events.
+
+Expected:
+- service recovers.
+- restart counters and events update.
+- no cross-node ownership corruption.
+
+## 5. Node failure simulation
+
+Stop one agent:
+
+```powershell
+docker compose stop agent-1
+```
+
+Wait for heartbeat timeout window, then inspect:
+
+```powershell
+curl.exe http://localhost:18080/nodes
+curl.exe http://localhost:18080/events
+```
+
+Expected:
+- failed node marked unreachable.
+- workloads from failed node become pending/rescheduled according to policy.
+
+Bring node back:
+
+```powershell
+docker compose start agent-1
+```
+
+Expected:
+- node becomes healthy again.
+- scheduler resumes normal placement.
+
+## 6. Shutdown
+
+```powershell
+docker compose down
+```
+
+For full cleanup including volumes/images built for this stack:
+
+```powershell
+docker compose down --volumes --rmi local
+```
