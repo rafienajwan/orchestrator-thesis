@@ -46,6 +46,31 @@ class CapturingAsyncClient:
             )
         return FakeResponse({})
 
+    async def get(self, url: str) -> FakeResponse:
+        self._calls.append((url, self._timeout))
+        return FakeResponse(
+            {
+                "node_id": "worker-1",
+                "workloads": {
+                    "svc-1": {
+                        "service": {
+                            "service_id": "svc-1",
+                            "image": "example/service:latest",
+                            "command": [],
+                            "env": {},
+                            "internal_port": 8000,
+                            "health_endpoint": "/health",
+                            "min_free_cpu": 0.1,
+                            "min_free_memory": 0.1,
+                        },
+                        "container_id": "container-1",
+                        "container_ip": "172.18.0.2",
+                        "status": "running",
+                    }
+                },
+            }
+        )
+
 
 @pytest.mark.asyncio
 async def test_deploy_uses_deploy_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -137,3 +162,26 @@ async def test_deploy_timeout_error_is_clear(monkeypatch: pytest.MonkeyPatch) ->
 
     assert "timed out after 61" in str(exc_info.value)
     assert "service=svc-timeout" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_local_state_uses_read_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[str, httpx.Timeout]] = []
+    monkeypatch.setattr(
+        "controller.agent_client.httpx.AsyncClient",
+        lambda timeout: CapturingAsyncClient(timeout=timeout, calls=calls),
+    )
+
+    client = HttpAgentClient(
+        deploy_timeout_seconds=61,
+        command_timeout_seconds=13,
+        read_timeout_seconds=7,
+    )
+
+    local_state = await client.get_local_state("http://agent-1:8080")
+
+    assert local_state.node_id == "worker-1"
+    assert calls[0][0] == "http://agent-1:8080/local-state"
+    timeout = calls[0][1]
+    assert timeout.read == 7
+    assert timeout.write == 7

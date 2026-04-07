@@ -62,14 +62,14 @@ class ControllerReporter:
             agent_url=self._settings.agent_public_url,
             sent_at=datetime.now(UTC),
         )
-        await self._post("/internal/agent/heartbeat", report.model_dump(mode="json"))
+        await self._post("/api/internal/agent/heartbeat", report.model_dump(mode="json"))
 
     async def send_resource_snapshot(self, snapshot: ResourceSnapshot) -> None:
         report = AgentResourceReport(node_id=self._settings.node_id, snapshot=snapshot)
-        await self._post("/internal/agent/resource-snapshot", report.model_dump(mode="json"))
+        await self._post("/api/internal/agent/resource-snapshot", report.model_dump(mode="json"))
 
     async def send_health_report(self, report: AgentHealthReport) -> None:
-        await self._post("/internal/agent/health-report", report.model_dump(mode="json"))
+        await self._post("/api/internal/agent/health-report", report.model_dump(mode="json"))
 
     async def _post(self, path: str, payload: dict[str, object]) -> None:
         url = f"{self._settings.controller_base_url.rstrip('/')}{path}"

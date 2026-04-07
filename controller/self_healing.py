@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 from controller.agent_client import AgentClient, AgentClientError
 from controller.config import ControllerSettings
+from controller.ingress_manager import IngressUpdater
 from controller.models import (
     AgentHealthReport,
     DeploymentStatus,
@@ -27,6 +28,7 @@ class SelfHealingManager:
         settings: ControllerSettings,
         store: StateStore,
         agent_client: AgentClient,
+        ingress_manager: IngressUpdater | None = None,
         scheduler: Callable[
             [ServiceSpec, list[NodeState]], ScheduleDecision
         ] = choose_node_least_load,
@@ -34,6 +36,7 @@ class SelfHealingManager:
         self._settings = settings
         self._store = store
         self._agent_client = agent_client
+        self._ingress_manager = ingress_manager
         self._scheduler = scheduler
         self._cooldown_until: dict[str, datetime] = {}
 
@@ -108,6 +111,7 @@ class SelfHealingManager:
                     )
                 )
                 self._set_cooldown(report.service_id, report.observed_at)
+                await self._sync_ingress(report.service_id, "health_reconcile_node_missing")
                 return
 
             restart_count = await self._store.increment_restart_counter(report.service_id)
@@ -158,6 +162,7 @@ class SelfHealingManager:
                 {"service_id": service_id, "node_id": node.node_id},
             )
             self._set_cooldown(service_id, at)
+            await self._sync_ingress(service_id, "restart_failed")
             return
 
         observed = await self._store.get_service_observed(service_id)
@@ -218,6 +223,7 @@ class SelfHealingManager:
                 )
             )
             self._set_cooldown(service_id, at)
+            await self._sync_ingress(service_id, "reschedule_no_candidate")
             return
 
         target = _find_node(nodes, decision.selected_node_id)
@@ -239,6 +245,7 @@ class SelfHealingManager:
                 )
             )
             self._set_cooldown(service_id, at)
+            await self._sync_ingress(service_id, "reschedule_target_missing")
             return
 
         try:
@@ -270,6 +277,7 @@ class SelfHealingManager:
                 },
             )
             self._set_cooldown(service_id, at)
+            await self._sync_ingress(service_id, "reschedule_deploy_failed")
             return
 
         old_node = _find_node(nodes, current_node_id)
@@ -325,6 +333,7 @@ class SelfHealingManager:
             },
         )
         self._set_cooldown(service_id, at)
+        await self._sync_ingress(service_id, "rescheduled_after_restart_limit")
 
     async def _reschedule_from_unreachable_node(self, placement: Placement, at: datetime) -> None:
         desired = await self._store.get_service_desired(placement.service_id)
@@ -352,6 +361,7 @@ class SelfHealingManager:
                     last_reported_at=at,
                 )
             )
+            await self._sync_ingress(placement.service_id, "node_unreachable_no_candidate")
             return
 
         target = _find_node(nodes, decision.selected_node_id)
@@ -372,6 +382,7 @@ class SelfHealingManager:
                     last_reported_at=at,
                 )
             )
+            await self._sync_ingress(placement.service_id, "node_unreachable_target_missing")
             return
 
         try:
@@ -402,6 +413,7 @@ class SelfHealingManager:
                     "candidate_node_id": target.node_id,
                 },
             )
+            await self._sync_ingress(placement.service_id, "node_unreachable_deploy_failed")
             return
 
         try:
@@ -445,6 +457,13 @@ class SelfHealingManager:
                 "to_node_id": target.node_id,
             },
         )
+        await self._sync_ingress(placement.service_id, "rescheduled_from_unreachable_node")
+
+    async def _sync_ingress(self, service_id: str, reason: str) -> None:
+        manager = self._ingress_manager
+        if manager is None:
+            return
+        await manager.sync_service(service_id=service_id, reason=reason)
 
     def _set_cooldown(self, service_id: str, at: datetime) -> None:
         interval_count = max(1, self._settings.cooldown_intervals_after_recovery)

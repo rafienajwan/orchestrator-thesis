@@ -51,10 +51,10 @@ async def test_controller_reporter_posts_heartbeat_and_snapshot(
         ResourceSnapshot(cpu_utilization=0.25, memory_utilization=0.5)
     )
 
-    assert calls[0][0] == "http://controller:8000/internal/agent/heartbeat"
+    assert calls[0][0] == "http://controller:8000/api/internal/agent/heartbeat"
     assert calls[0][1]["node_id"] == "worker-1"
     assert calls[0][1]["agent_url"] == "http://agent-1:8080"
-    assert calls[1][0] == "http://controller:8000/internal/agent/resource-snapshot"
+    assert calls[1][0] == "http://controller:8000/api/internal/agent/resource-snapshot"
     assert calls[1][1]["node_id"] == "worker-1"
     snapshot = calls[1][1]["snapshot"]
     assert snapshot["cpu_utilization"] == 0.25

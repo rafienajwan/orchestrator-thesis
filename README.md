@@ -69,7 +69,7 @@ If host port 18080 is also occupied, set `NGINX_HOST_PORT` in `.env`.
 ## Deploy Service
 
 ```powershell
-curl.exe -X POST http://localhost:18080/services/deploy `
+curl.exe -X POST http://localhost:18080/api/services/deploy `
   -H "Content-Type: application/json" `
   -d '{"service":{"service_id":"sample-app","image":"sample-app:latest","command":[],"env":{},"internal_port":8000,"health_endpoint":"/health","min_free_cpu":0.1,"min_free_memory":0.1}}'
 ```
@@ -77,38 +77,40 @@ curl.exe -X POST http://localhost:18080/services/deploy `
 ## Check Nodes
 
 ```powershell
-curl.exe http://localhost:18080/nodes
+curl.exe http://localhost:18080/api/nodes
 ```
 
 ## Check Events
 
 ```powershell
-curl.exe http://localhost:18080/events
+curl.exe http://localhost:18080/api/events
 ```
 
 ## Accessing Deployed Services
 
-Deployed workloads are NOT directly accessible via the public Nginx entry point (http://localhost:18080).
-This is by design: controller owns service placement decisions, agents own workload execution.
+Control-plane and workload ingress are now separated:
+- `http://localhost:18080/api/*` routes to controller API
+- `http://localhost:18080/app/*` routes to active workload
+- `http://localhost:18080/` also routes to active workload root
 
-To access deployed service:
-1. Query nodes to see agent assignments:
+Client or k6 should always use the same workload endpoint:
+1. Access root endpoint:
    ```powershell
-   curl.exe http://localhost:18080/nodes
+   curl.exe http://localhost:18080/app/health
    ```
 
-2. Query service details to find assigned node and container IP:
+2. Control operations stay on `/api`:
    ```powershell
-   curl.exe http://localhost:18080/services/<service_id>
+   curl.exe http://localhost:18080/api/services/sample-app
+   curl.exe http://localhost:18080/api/nodes
+   curl.exe http://localhost:18080/api/events
    ```
 
-3. Access workload directly on internal network via container IP (for prototype):
+3. Direct container IP access is debug-only (not main experiment path):
    ```bash
-   # Inside compose network or from agent node
+   # Debug only
    curl http://<container_ip>:<internal_port>/health
    ```
-
-For production scenarios, implement workload ingress via dedicated service discovery or agent-scoped reverse proxy.
 
 ## Controller→Agent Timeout Configuration
 

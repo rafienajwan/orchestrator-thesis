@@ -16,9 +16,9 @@ Expected:
 ## 2. Basic API reachability
 
 ```powershell
-curl.exe http://localhost:18080/
-curl.exe http://localhost:18080/health
-curl.exe http://localhost:18080/nodes
+curl.exe http://localhost:18080/api/
+curl.exe http://localhost:18080/api/health
+curl.exe http://localhost:18080/api/nodes
 ```
 
 Expected:
@@ -29,7 +29,7 @@ Expected:
 ## 3. Deploy sample workload
 
 ```powershell
-curl.exe -X POST http://localhost:18080/services/deploy `
+curl.exe -X POST http://localhost:18080/api/services/deploy `
   -H "Content-Type: application/json" `
   -d '{"service":{"service_id":"sample-app","image":"sample-app:latest","command":[],"env":{},"internal_port":8000,"health_endpoint":"/health","min_free_cpu":0.1,"min_free_memory":0.1}}'
 ```
@@ -37,13 +37,24 @@ curl.exe -X POST http://localhost:18080/services/deploy `
 Then inspect:
 
 ```powershell
-curl.exe http://localhost:18080/events
-curl.exe http://localhost:18080/nodes
+curl.exe http://localhost:18080/api/events
+curl.exe http://localhost:18080/api/nodes
 ```
 
 Expected:
 - deploy event recorded.
 - service assigned to one node.
+
+Validate fixed workload endpoint:
+
+```powershell
+curl.exe http://localhost:18080/app/health
+curl.exe http://localhost:18080/
+```
+
+Expected:
+- both routes hit active workload.
+- endpoint remains the same even after service restart/reschedule.
 
 ## 4. Restart and reschedule behavior
 
@@ -65,8 +76,9 @@ docker compose stop agent-1
 Wait for heartbeat timeout window, then inspect:
 
 ```powershell
-curl.exe http://localhost:18080/nodes
-curl.exe http://localhost:18080/events
+curl.exe http://localhost:18080/api/nodes
+curl.exe http://localhost:18080/api/events
+curl.exe http://localhost:18080/app/health
 ```
 
 Expected:

@@ -13,6 +13,7 @@ from redis.asyncio import Redis
 from controller.agent_client import HttpAgentClient
 from controller.api import build_router
 from controller.config import ControllerSettings, get_settings
+from controller.ingress_manager import IngressManager
 from controller.reconciler import Reconciler
 from controller.self_healing import SelfHealingManager
 from controller.service_manager import ServiceManager
@@ -47,11 +48,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         command_timeout_seconds=float(settings.agent_command_timeout_seconds),
         read_timeout_seconds=float(settings.agent_read_timeout_seconds),
     )
-    service_manager = ServiceManager(store=state_store, agent_client=agent_client)
+    ingress_manager = IngressManager(settings=settings, store=state_store, agent_client=agent_client)
+    service_manager = ServiceManager(
+        store=state_store,
+        agent_client=agent_client,
+        ingress_manager=ingress_manager,
+    )
     self_healing_manager = SelfHealingManager(
         settings=settings,
         store=state_store,
         agent_client=agent_client,
+        ingress_manager=ingress_manager,
     )
     reconciler = Reconciler(
         settings=settings,
@@ -70,6 +77,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.state_store = state_store
     app.state.agent_client = agent_client
     app.state.service_manager = service_manager
+    app.state.ingress_manager = ingress_manager
     app.state.self_healing_manager = self_healing_manager
     app.state.reconciler = reconciler
     app.state.reconcile_stop_event = stop_event
@@ -89,7 +97,7 @@ def create_app(settings: ControllerSettings | None = None) -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
-    app.include_router(build_router())
+    app.include_router(build_router(), prefix="/api")
     if settings is not None:
         app.state.settings = settings
     return app

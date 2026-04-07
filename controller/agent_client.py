@@ -22,12 +22,30 @@ class AgentDeployResponse(BaseModel):
     node_id: str | None = None
 
 
+class AgentWorkloadState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service: ServiceSpec
+    container_id: str | None = None
+    container_ip: str | None = None
+    status: str
+
+
+class AgentLocalStateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    node_id: str
+    workloads: dict[str, AgentWorkloadState]
+
+
 class AgentClient(Protocol):
     async def deploy(self, agent_url: str, service: ServiceSpec) -> AgentDeployResponse: ...
 
     async def stop(self, agent_url: str, service_id: str) -> None: ...
 
     async def restart(self, agent_url: str, service_id: str) -> None: ...
+
+
 class HttpAgentClient(AgentClient):
     def __init__(
         self,
@@ -102,6 +120,18 @@ class HttpAgentClient(AgentClient):
                 f"Agent restart request failed for service={service_id}"
             ) from exc
 
+    async def get_local_state(self, agent_url: str) -> AgentLocalStateResponse:
+        url = f"{agent_url.rstrip('/')}/local-state"
+        try:
+            response = await self._get_json(url, request_timeout=self._read_timeout)
+        except httpx.HTTPError as exc:
+            raise AgentClientError("Agent local-state read failed") from exc
+
+        try:
+            return AgentLocalStateResponse.model_validate(response.json())
+        except Exception as exc:
+            raise AgentClientError("Agent local-state response is invalid") from exc
+
     async def _post_json(
         self,
         url: str,
@@ -120,3 +150,13 @@ class HttpAgentClient(AgentClient):
             raise AgentClientError(
                 f"Agent {operation_name} timed out after {timeout_seconds} seconds for service={service_id}"
             ) from exc
+
+    async def _get_json(
+        self,
+        url: str,
+        request_timeout: httpx.Timeout,
+    ) -> httpx.Response:
+        async with httpx.AsyncClient(timeout=request_timeout) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            return response

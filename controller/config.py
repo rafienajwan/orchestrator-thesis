@@ -9,6 +9,7 @@ class ControllerSettings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        populate_by_name=True,
         extra="ignore",
     )
 
@@ -60,6 +61,58 @@ class ControllerSettings(BaseSettings):
     cooldown_intervals_after_recovery: int = 1
 
     event_log_max_items: int = Field(default=500, ge=100, le=10_000)
+
+    ingress_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("INGRESS_ENABLED", "CONTROLLER_INGRESS_ENABLED"),
+    )
+    ingress_active_service_id: str = Field(
+        default="sample-app",
+        min_length=1,
+        validation_alias=AliasChoices(
+            "INGRESS_ACTIVE_SERVICE_ID",
+            "CONTROLLER_INGRESS_ACTIVE_SERVICE_ID",
+        ),
+    )
+    ingress_upstream_file_path: str = Field(
+        default="/shared/nginx/upstreams/active.conf",
+        min_length=1,
+        validation_alias=AliasChoices(
+            "INGRESS_UPSTREAM_FILE_PATH",
+            "CONTROLLER_INGRESS_UPSTREAM_FILE_PATH",
+        ),
+    )
+    ingress_unavailable_target: str = Field(
+        default="127.0.0.1:65535",
+        min_length=3,
+        validation_alias=AliasChoices(
+            "INGRESS_UNAVAILABLE_TARGET",
+            "CONTROLLER_INGRESS_UNAVAILABLE_TARGET",
+        ),
+    )
+    nginx_reload_enabled: bool = Field(
+        default=True,
+        validation_alias=AliasChoices(
+            "NGINX_RELOAD_ENABLED",
+            "CONTROLLER_NGINX_RELOAD_ENABLED",
+        ),
+    )
+    nginx_reload_compose_project_name: str = Field(
+        default="orchestrator-thesis",
+        min_length=1,
+        validation_alias=AliasChoices(
+            "NGINX_RELOAD_COMPOSE_PROJECT_NAME",
+            "CONTROLLER_NGINX_RELOAD_COMPOSE_PROJECT_NAME",
+        ),
+    )
+    nginx_reload_service_name: str = Field(
+        default="nginx",
+        min_length=1,
+        validation_alias=AliasChoices(
+            "NGINX_RELOAD_SERVICE_NAME",
+            "CONTROLLER_NGINX_RELOAD_SERVICE_NAME",
+        ),
+    )
 
 
 @lru_cache(maxsize=1)

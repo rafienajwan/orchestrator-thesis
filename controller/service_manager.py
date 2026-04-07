@@ -4,6 +4,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 
 from controller.agent_client import AgentClient, AgentClientError
+from controller.ingress_manager import IngressUpdater
 from controller.models import (
     DeploymentStatus,
     EventRecord,
@@ -26,12 +27,14 @@ class ServiceManager:
         self,
         store: StateStore,
         agent_client: AgentClient,
+        ingress_manager: IngressUpdater | None = None,
         scheduler: Callable[
             [ServiceSpec, list[NodeState]], ScheduleDecision
         ] = choose_node_least_load,
     ) -> None:
         self._store = store
         self._agent_client = agent_client
+        self._ingress_manager = ingress_manager
         self._scheduler = scheduler
 
     async def deploy(self, request: ServiceDeploymentRequest) -> ServiceObservedState:
@@ -75,6 +78,7 @@ class ServiceManager:
                 "Placement failed, deployment moved to pending",
                 {"service_id": service_id, "reason": decision.reason},
             )
+            await self._sync_ingress(service_id, "placement_failed")
             return observed
 
         selected_node = _find_node(nodes, decision.selected_node_id)
@@ -98,6 +102,7 @@ class ServiceManager:
                 "Agent deployment failed, service pending",
                 {"service_id": service_id, "node_id": selected_node.node_id},
             )
+            await self._sync_ingress(service_id, "deploy_failed")
             return observed
 
         placement = Placement(service_id=service_id, node_id=selected_node.node_id)
@@ -133,6 +138,7 @@ class ServiceManager:
                 "container_id": result.container_id,
             },
         )
+        await self._sync_ingress(service_id, "deploy_succeeded")
         return observed
 
     async def stop(self, service_id: str) -> ServiceObservedState:
@@ -181,6 +187,7 @@ class ServiceManager:
             "Service stopped",
             {"service_id": service_id},
         )
+        await self._sync_ingress(service_id, "service_stopped")
         return observed
 
     async def restart(self, service_id: str) -> ServiceObservedState:
@@ -218,6 +225,7 @@ class ServiceManager:
             "Service restarted",
             {"service_id": service_id, "node_id": node.node_id},
         )
+        await self._sync_ingress(service_id, "service_restarted")
         return observed
 
     async def get_service(self, service_id: str) -> ServiceObservedState | None:
@@ -243,9 +251,18 @@ class ServiceManager:
             return None
         return await self._deploy_unlocked(ServiceDeploymentRequest(service=desired.service))
 
+    async def _sync_ingress(self, service_id: str, reason: str) -> None:
+        manager = self._ingress_manager
+        if manager is None:
+            return
+        await manager.sync_service(service_id=service_id, reason=reason)
+
 
 def _find_node(nodes: list[NodeState], node_id: str) -> NodeState | None:
     for node in nodes:
         if node.node_id == node_id:
             return node
     return None
+
+
+

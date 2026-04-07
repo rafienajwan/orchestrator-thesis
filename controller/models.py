@@ -41,6 +41,7 @@ class EventType(StrEnum):
     self_healing = "self_healing"
     node = "node"
     health = "health"
+    ingress = "ingress"
 
 
 class ResourceSnapshot(OrchestratorBaseModel):
