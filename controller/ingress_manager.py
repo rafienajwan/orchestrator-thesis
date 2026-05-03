@@ -91,7 +91,7 @@ class IngressManager(IngressUpdater):
             return _SyncDecision(should_update=True, target=None)
 
         read_succeeded = False
-        for _ in range(3):
+        for _ in range(20):
             try:
                 local_state = await self._agent_client.get_local_state(node.agent_url)
             except AgentClientError:
