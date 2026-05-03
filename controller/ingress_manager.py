@@ -95,19 +95,19 @@ class IngressManager(IngressUpdater):
             try:
                 local_state = await self._agent_client.get_local_state(node.agent_url)
             except AgentClientError:
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.5)
                 continue
 
             read_succeeded = True
 
             workload = local_state.workloads.get(service_id)
             if workload is None or workload.published_port is None:
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.5)
                 continue
 
             node_address = _first_valid_node_address(local_state.node_address, node.node_address)
             if node_address is None:
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.5)
                 continue
 
             return _SyncDecision(
