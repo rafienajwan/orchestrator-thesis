@@ -23,7 +23,7 @@ class AgentDeployResponse(BaseModel):
 
 
 class AgentWorkloadState(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     service: ServiceSpec
     container_id: str | None = None
@@ -34,7 +34,7 @@ class AgentWorkloadState(BaseModel):
 
 
 class AgentLocalStateResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     node_id: str
     node_address: str
