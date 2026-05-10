@@ -102,12 +102,12 @@ class SelfHealingManager:
                     )
                 )
                 await self._store.set_service_observed(
-                    ServiceObservedState(
-                        service_id=report.service_id,
-                        status=DeploymentStatus.pending,
-                        health=ServiceHealth.unhealthy,
-                        node_id=placement.node_id,
-                        last_reported_at=report.observed_at,
+                    observed.model_copy(
+                        update={
+                            "status": DeploymentStatus.pending,
+                            "health": ServiceHealth.unhealthy,
+                            "last_reported_at": report.observed_at,
+                        }
                     )
                 )
                 self._set_cooldown(report.service_id, report.observed_at)
@@ -137,6 +137,7 @@ class SelfHealingManager:
                 await self._reschedule_from_unreachable_node(placement, now)
 
     async def _restart_same_node(self, service_id: str, node: NodeState, at: datetime) -> None:
+        current_observed = await self._store.get_service_observed(service_id)
         try:
             await self._agent_client.restart(node.agent_url, service_id)
         except AgentClientError:
@@ -147,8 +148,16 @@ class SelfHealingManager:
                     created_at=at,
                 )
             )
-            await self._store.set_service_observed(
-                ServiceObservedState(
+            failed_state = (
+                current_observed.model_copy(
+                    update={
+                        "status": DeploymentStatus.failed,
+                        "health": ServiceHealth.unhealthy,
+                        "last_reported_at": at,
+                    }
+                )
+                if current_observed is not None
+                else ServiceObservedState(
                     service_id=service_id,
                     status=DeploymentStatus.failed,
                     health=ServiceHealth.unhealthy,
@@ -156,6 +165,7 @@ class SelfHealingManager:
                     last_reported_at=at,
                 )
             )
+            await self._store.set_service_observed(failed_state)
             await self._store.append_event(
                 EventType.self_healing,
                 "Service restart failed on current node",
@@ -201,6 +211,8 @@ class SelfHealingManager:
         if desired is None:
             return
 
+        observed = await self._store.get_service_observed(service_id)
+
         nodes = await self._store.list_nodes()
         candidates = [node for node in nodes if node.node_id != current_node_id]
         decision = self._scheduler(desired.service, candidates)
@@ -213,8 +225,16 @@ class SelfHealingManager:
                     created_at=at,
                 )
             )
-            await self._store.set_service_observed(
-                ServiceObservedState(
+            pending_state = (
+                observed.model_copy(
+                    update={
+                        "status": DeploymentStatus.pending,
+                        "health": ServiceHealth.unhealthy,
+                        "last_reported_at": at,
+                    }
+                )
+                if observed is not None
+                else ServiceObservedState(
                     service_id=service_id,
                     status=DeploymentStatus.pending,
                     health=ServiceHealth.unhealthy,
@@ -222,6 +242,7 @@ class SelfHealingManager:
                     last_reported_at=at,
                 )
             )
+            await self._store.set_service_observed(pending_state)
             self._set_cooldown(service_id, at)
             await self._sync_ingress(service_id, "reschedule_no_candidate")
             return
@@ -235,8 +256,16 @@ class SelfHealingManager:
                     created_at=at,
                 )
             )
-            await self._store.set_service_observed(
-                ServiceObservedState(
+            pending_state = (
+                observed.model_copy(
+                    update={
+                        "status": DeploymentStatus.pending,
+                        "health": ServiceHealth.unhealthy,
+                        "last_reported_at": at,
+                    }
+                )
+                if observed is not None
+                else ServiceObservedState(
                     service_id=service_id,
                     status=DeploymentStatus.pending,
                     health=ServiceHealth.unhealthy,
@@ -244,6 +273,7 @@ class SelfHealingManager:
                     last_reported_at=at,
                 )
             )
+            await self._store.set_service_observed(pending_state)
             self._set_cooldown(service_id, at)
             await self._sync_ingress(service_id, "reschedule_target_missing")
             return
@@ -258,8 +288,16 @@ class SelfHealingManager:
                     created_at=at,
                 )
             )
-            await self._store.set_service_observed(
-                ServiceObservedState(
+            failed_state = (
+                observed.model_copy(
+                    update={
+                        "status": DeploymentStatus.failed,
+                        "health": ServiceHealth.unhealthy,
+                        "last_reported_at": at,
+                    }
+                )
+                if observed is not None
+                else ServiceObservedState(
                     service_id=service_id,
                     status=DeploymentStatus.failed,
                     health=ServiceHealth.unhealthy,
@@ -267,6 +305,7 @@ class SelfHealingManager:
                     last_reported_at=at,
                 )
             )
+            await self._store.set_service_observed(failed_state)
             await self._store.append_event(
                 EventType.self_healing,
                 "Service reschedule failed after restart limit reached",
@@ -340,6 +379,8 @@ class SelfHealingManager:
         if desired is None:
             return
 
+        observed = await self._store.get_service_observed(placement.service_id)
+
         nodes = await self._store.list_nodes()
         candidates = [node for node in nodes if node.node_id != placement.node_id]
         decision = self._scheduler(desired.service, candidates)
@@ -352,8 +393,17 @@ class SelfHealingManager:
                     created_at=at,
                 )
             )
-            await self._store.set_service_observed(
-                ServiceObservedState(
+            pending_state = (
+                observed.model_copy(
+                    update={
+                        "status": DeploymentStatus.pending,
+                        "health": ServiceHealth.unknown,
+                        "node_id": None,
+                        "last_reported_at": at,
+                    }
+                )
+                if observed is not None
+                else ServiceObservedState(
                     service_id=placement.service_id,
                     status=DeploymentStatus.pending,
                     health=ServiceHealth.unknown,
@@ -361,6 +411,7 @@ class SelfHealingManager:
                     last_reported_at=at,
                 )
             )
+            await self._store.set_service_observed(pending_state)
             await self._sync_ingress(placement.service_id, "node_unreachable_no_candidate")
             return
 
@@ -373,8 +424,16 @@ class SelfHealingManager:
                     created_at=at,
                 )
             )
-            await self._store.set_service_observed(
-                ServiceObservedState(
+            pending_state = (
+                observed.model_copy(
+                    update={
+                        "status": DeploymentStatus.pending,
+                        "health": ServiceHealth.unhealthy,
+                        "last_reported_at": at,
+                    }
+                )
+                if observed is not None
+                else ServiceObservedState(
                     service_id=placement.service_id,
                     status=DeploymentStatus.pending,
                     health=ServiceHealth.unhealthy,
@@ -382,6 +441,7 @@ class SelfHealingManager:
                     last_reported_at=at,
                 )
             )
+            await self._store.set_service_observed(pending_state)
             await self._sync_ingress(placement.service_id, "node_unreachable_target_missing")
             return
 
@@ -395,8 +455,16 @@ class SelfHealingManager:
                     created_at=at,
                 )
             )
-            await self._store.set_service_observed(
-                ServiceObservedState(
+            failed_state = (
+                observed.model_copy(
+                    update={
+                        "status": DeploymentStatus.failed,
+                        "health": ServiceHealth.unhealthy,
+                        "last_reported_at": at,
+                    }
+                )
+                if observed is not None
+                else ServiceObservedState(
                     service_id=placement.service_id,
                     status=DeploymentStatus.failed,
                     health=ServiceHealth.unhealthy,
@@ -404,6 +472,7 @@ class SelfHealingManager:
                     last_reported_at=at,
                 )
             )
+            await self._store.set_service_observed(failed_state)
             await self._store.append_event(
                 EventType.self_healing,
                 "Service reschedule failed due to unreachable node",
