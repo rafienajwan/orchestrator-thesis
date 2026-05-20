@@ -9,6 +9,7 @@ from controller.config import ControllerSettings
 from controller.models import (
     AgentHealthReport,
     DeploymentStatus,
+    EventType,
     NodeState,
     NodeStatus,
     Placement,
@@ -88,6 +89,15 @@ async def test_self_healing_restarts_on_consecutive_failures_before_max_restart(
     counter = await store.get_restart_counter(spec.service_id)
     assert counter.count == 1
 
+    events = await store.list_events()
+    assert any(
+        event.event_type == EventType.self_healing
+        and event.message == "Service restarted after consecutive health failures"
+        and event.details.get("service_id") == spec.service_id
+        and event.details.get("node_id") == node.node_id
+        for event in events
+    )
+
 
 @pytest.mark.asyncio
 async def test_self_healing_reschedules_after_restart_limit_reached() -> None:
@@ -153,3 +163,13 @@ async def test_self_healing_reschedules_after_restart_limit_reached() -> None:
 
     counter = await store.get_restart_counter(spec.service_id)
     assert counter.count == 0
+
+    events = await store.list_events()
+    assert any(
+        event.event_type == EventType.self_healing
+        and event.message == "Service rescheduled after repeated health failures"
+        and event.details.get("service_id") == spec.service_id
+        and event.details.get("from_node_id") == "node-a"
+        and event.details.get("to_node_id") == "node-b"
+        for event in events
+    )

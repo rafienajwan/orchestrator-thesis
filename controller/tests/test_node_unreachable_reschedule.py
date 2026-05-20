@@ -103,3 +103,11 @@ async def test_node_unreachable_triggers_reschedule_of_all_workloads_on_node() -
     assert restart_counter.count == 0
     assert any(event.event_type == EventType.node for event in events)
     assert any(event.event_type == EventType.self_healing for event in events)
+    assert any(
+        event.event_type == EventType.self_healing
+        and event.message == "Service rescheduled after node unreachable"
+        and event.details.get("service_id") == spec.service_id
+        and event.details.get("from_node_id") == "worker-1"
+        and event.details.get("to_node_id") == "worker-2"
+        for event in events
+    )

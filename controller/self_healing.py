@@ -364,7 +364,7 @@ class SelfHealingManager:
         )
         await self._store.append_event(
             EventType.self_healing,
-            "Service rescheduled after restart limit reached",
+            "Service rescheduled after repeated health failures",
             {
                 "service_id": service_id,
                 "from_node_id": current_node_id,
@@ -519,7 +519,7 @@ class SelfHealingManager:
         )
         await self._store.append_event(
             EventType.self_healing,
-            "Service rescheduled due to unreachable node",
+            "Service rescheduled after node unreachable",
             {
                 "service_id": placement.service_id,
                 "from_node_id": placement.node_id,
