@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
 from controller.models import (
+    AgentCrashReport,
     AgentHealthReport,
     AgentHeartbeatReport,
     AgentResourceReport,
@@ -143,6 +144,14 @@ def build_router() -> APIRouter:
         self_healing: SelfHealingManager = Depends(_get_self_healing),
     ) -> AckResponse:
         await self_healing.handle_health_report(report)
+        return AckResponse(status="ok")
+
+    @router.post("/internal/agent/crash-report", response_model=AckResponse)
+    async def ingest_crash(
+        report: AgentCrashReport,
+        self_healing: SelfHealingManager = Depends(_get_self_healing),
+    ) -> AckResponse:
+        await self_healing.handle_crash_report(report)
         return AckResponse(status="ok")
 
     return router
