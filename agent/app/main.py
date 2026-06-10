@@ -13,6 +13,7 @@ from agent.app.adapters.docker_adapter import DockerAdapter, DockerSdkAdapter
 from agent.app.api import build_router
 from agent.app.core.config import AgentSettings, get_settings
 from agent.app.core.state import AgentStateStore
+from agent.app.services.docker_event_watcher import DockerEventWatcher
 from agent.app.services.telemetry import AgentTelemetryService, ControllerReporter, ResourceSampler
 from agent.app.services.workload_manager import AgentWorkloadManager
 
@@ -62,11 +63,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     stop_event = asyncio.Event()
+    background_tasks: list[asyncio.Task[None]] = []
+
     start_telemetry = getattr(app.state, "start_telemetry", True)
-    telemetry_task: asyncio.Task[None] | None = None
     if start_telemetry:
-        telemetry_task = asyncio.create_task(
-            telemetry_service.run(stop_event), name="agent-telemetry"
+        background_tasks.append(
+            asyncio.create_task(telemetry_service.run(stop_event), name="agent-telemetry")
+        )
+
+    # Start Docker event watcher for sub-second crash detection
+    start_event_watcher = getattr(app.state, "start_event_watcher", True)
+    if start_telemetry and start_event_watcher and settings.docker_event_watcher_enabled:
+        event_watcher = DockerEventWatcher(
+            settings=settings,
+            reporter=reporter,
+        )
+        background_tasks.append(
+            asyncio.create_task(event_watcher.run(stop_event), name="agent-event-watcher")
         )
 
     app.state.settings = settings
@@ -75,14 +88,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.workload_manager = workload_manager
     app.state.telemetry_service = telemetry_service
     app.state.telemetry_stop_event = stop_event
-    app.state.telemetry_task = telemetry_task
+    app.state.telemetry_task = background_tasks[0] if background_tasks else None
 
     try:
         yield
     finally:
         stop_event.set()
-        if telemetry_task is not None:
-            await asyncio.gather(telemetry_task, return_exceptions=True)
+        if background_tasks:
+            await asyncio.gather(*background_tasks, return_exceptions=True)
+        await reporter.close()
 
 
 def create_app(
