@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 
 import httpx
@@ -9,11 +10,14 @@ from agent.app.core.config import AgentSettings
 from agent.app.core.state import AgentStateStore
 from agent.app.services.workload_manager import AgentWorkloadManager
 from controller.models import (
+    AgentCrashReport,
     AgentHealthReport,
     AgentHeartbeatReport,
     AgentResourceReport,
     ResourceSnapshot,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ResourceSampler:
@@ -55,6 +59,14 @@ class ResourceSampler:
 class ControllerReporter:
     def __init__(self, settings: AgentSettings) -> None:
         self._settings = settings
+        # Shared connection pool for all controller communications
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(settings.health_check_timeout_seconds),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+
+    async def close(self) -> None:
+        await self._client.aclose()
 
     async def send_heartbeat(self) -> None:
         report = AgentHeartbeatReport(
@@ -72,14 +84,16 @@ class ControllerReporter:
     async def send_health_report(self, report: AgentHealthReport) -> None:
         await self._post("/api/internal/agent/health-report", report.model_dump(mode="json"))
 
+    async def send_crash_report(self, report: AgentCrashReport) -> None:
+        await self._post("/api/internal/agent/crash-report", report.model_dump(mode="json"))
+
     async def _post(self, path: str, payload: dict[str, object]) -> None:
         url = f"{self._settings.controller_base_url.rstrip('/')}{path}"
-        async with httpx.AsyncClient(timeout=self._settings.health_check_timeout_seconds) as client:
-            try:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-            except httpx.HTTPError:
-                return
+        try:
+            response = await self._client.post(url, json=payload)
+            response.raise_for_status()
+        except httpx.HTTPError:
+            return
 
 
 class AgentTelemetryService:
@@ -96,6 +110,9 @@ class AgentTelemetryService:
         self._workload_manager = workload_manager
         self._reporter = reporter
         self._sampler = sampler
+        # Adaptive resource snapshot tracking
+        self._last_sent_snapshot: tuple[float, float] | None = None
+        self._snapshot_change_threshold = 0.05  # 5% change threshold
 
     async def run(self, stop_event: asyncio.Event) -> None:
         await asyncio.gather(
@@ -115,8 +132,25 @@ class AgentTelemetryService:
         while not stop_event.is_set():
             snapshot = self._sampler.sample()
             await self._store.record_snapshot(snapshot)
-            await self._reporter.send_resource_snapshot(snapshot)
-            await _sleep_or_stop(stop_event, self._settings.telemetry_interval_seconds)
+
+            # Only send to controller if values changed significantly
+            should_send = True
+            if self._last_sent_snapshot is not None:
+                cpu_delta = abs(snapshot.cpu_utilization - self._last_sent_snapshot[0])
+                mem_delta = abs(snapshot.memory_utilization - self._last_sent_snapshot[1])
+                if (
+                    cpu_delta < self._snapshot_change_threshold
+                    and mem_delta < self._snapshot_change_threshold
+                ):
+                    should_send = False
+
+            if should_send:
+                await self._reporter.send_resource_snapshot(snapshot)
+                self._last_sent_snapshot = (snapshot.cpu_utilization, snapshot.memory_utilization)
+
+            await _sleep_or_stop(
+                stop_event, self._settings.resource_snapshot_interval_seconds
+            )
 
     async def _health_loop(self, stop_event: asyncio.Event) -> None:
         while not stop_event.is_set():
