@@ -32,6 +32,37 @@ class IngressManager(IngressUpdater):
         self._store = store
         self._agent_client = cast(_LocalStateReader, agent_client)
         self._lock = asyncio.Lock()
+        # Lazy-initialized Docker client and cached nginx container
+        self._docker_client: docker.DockerClient | None = None
+        self._nginx_container: Any | None = None
+
+    def _get_docker_client(self) -> docker.DockerClient:
+        if self._docker_client is None:
+            self._docker_client = docker.from_env()
+        return self._docker_client
+
+    def _get_nginx_container(self) -> Any:
+        if self._nginx_container is not None:
+            try:
+                self._nginx_container.reload()
+                if self._nginx_container.status == "running":
+                    return self._nginx_container
+            except Exception:
+                self._nginx_container = None
+
+        client = self._get_docker_client()
+        containers = client.containers.list(
+            filters={
+                "label": [
+                    f"com.docker.compose.project={self._settings.nginx_reload_compose_project_name}",
+                    f"com.docker.compose.service={self._settings.nginx_reload_service_name}",
+                ]
+            }
+        )
+        if not containers:
+            raise RuntimeError("Nginx container not found for reload")
+        self._nginx_container = containers[0]
+        return self._nginx_container
 
     async def sync_service(self, service_id: str, reason: str) -> None:
         if not self._settings.ingress_enabled:
@@ -147,22 +178,13 @@ class IngressManager(IngressUpdater):
 
     def _reload_nginx(self) -> None:
         try:
-            client = docker.from_env()
-            containers = client.containers.list(
-                filters={
-                    "label": [
-                        f"com.docker.compose.project={self._settings.nginx_reload_compose_project_name}",
-                        f"com.docker.compose.service={self._settings.nginx_reload_service_name}",
-                    ]
-                }
-            )
-            if not containers:
-                raise RuntimeError("Nginx container not found for reload")
-            result = containers[0].exec_run("nginx -s reload")
+            container = self._get_nginx_container()
+            result = container.exec_run("nginx -s reload")
             if result.exit_code != 0:
                 output = result.output.decode("utf-8", errors="ignore")
                 raise RuntimeError(f"nginx reload failed: {output}")
         except DockerException as exc:
+            self._nginx_container = None  # Invalidate cache on error
             raise RuntimeError("Failed to reload nginx via Docker socket") from exc
 
 
