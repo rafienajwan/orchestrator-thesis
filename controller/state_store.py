@@ -4,7 +4,7 @@ import asyncio
 import json
 import uuid
 from collections import deque
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
 from redis.asyncio import Redis
@@ -74,6 +74,10 @@ class StateStore(Protocol):
 
     async def get_restart_counter(self, service_id: str) -> RestartCounter: ...
 
+    async def get_service_generation(self, service_id: str) -> int: ...
+
+    async def increment_service_generation(self, service_id: str) -> int: ...
+
     async def add_recovery_record(self, record: RecoveryRecord) -> None: ...
 
     async def list_recovery_records(self, limit: int = 100) -> list[RecoveryRecord]: ...
@@ -87,13 +91,23 @@ class StateStore(Protocol):
 
 class RedisStateStore(StateStore):
     def __init__(
-        self, redis: Redis, key_prefix: str = "orchestrator", event_log_max_items: int = 500
+        self,
+        redis: Redis,
+        key_prefix: str = "orchestrator",
+        event_log_max_items: int = 200,
+        heartbeat_write_threshold_seconds: int = 10,
+        snapshot_change_threshold: float = 0.05,
     ) -> None:
         self._redis: Any = redis
         self._prefix = key_prefix
         self._event_log_max_items = event_log_max_items
+        self._heartbeat_write_threshold = timedelta(seconds=heartbeat_write_threshold_seconds)
+        self._snapshot_change_threshold = snapshot_change_threshold
         self._service_locks: dict[str, asyncio.Lock] = {}
         self._service_locks_guard = asyncio.Lock()
+        # In-memory caches for write coalescing
+        self._node_last_written: dict[str, datetime] = {}
+        self._node_last_snapshot: dict[str, tuple[float, float]] = {}
 
     def _k(self, suffix: str) -> str:
         return f"{self._prefix}:{suffix}"
@@ -125,10 +139,25 @@ class RedisStateStore(StateStore):
         key = self._k(f"node:{node_id}")
         incoming_address = _normalize_node_address(node_address)
 
+        # Write coalescing: skip Redis write if heartbeat is recent and node was healthy
+        last_written = self._node_last_written.get(node_id)
+        if (
+            last_written is not None
+            and (timestamp - last_written) < self._heartbeat_write_threshold
+        ):
+            return
+
         try:
             existing_raw = await self._redis.get(key)
             if existing_raw:
                 existing = NodeState.model_validate(self._from_json(existing_raw))
+                # Always write if node was unavailable (status change)
+                if (
+                    existing.status == NodeStatus.healthy
+                    and last_written is not None
+                    and (timestamp - last_written) < self._heartbeat_write_threshold
+                ):
+                    return
                 routable_address = incoming_address or _normalize_node_address(existing.node_address) or "unknown"
                 state = existing.model_copy(
                     update={
@@ -150,11 +179,20 @@ class RedisStateStore(StateStore):
 
             await self._redis.set(key, state.model_dump_json())
             await self._redis.sadd(self._k("nodes"), node_id)
+            self._node_last_written[node_id] = timestamp
         except RedisError as exc:
             raise StateStoreError(f"Failed to upsert heartbeat for node={node_id}") from exc
 
     async def upsert_node_snapshot(self, node_id: str, snapshot: ResourceSnapshot) -> None:
         key = self._k(f"node:{node_id}")
+
+        # Threshold-based write: skip if values haven't changed significantly
+        last = self._node_last_snapshot.get(node_id)
+        if last is not None:
+            cpu_delta = abs(snapshot.cpu_utilization - last[0])
+            mem_delta = abs(snapshot.memory_utilization - last[1])
+            if cpu_delta < self._snapshot_change_threshold and mem_delta < self._snapshot_change_threshold:
+                return
 
         try:
             existing_raw = await self._redis.get(key)
@@ -164,6 +202,7 @@ class RedisStateStore(StateStore):
             existing = NodeState.model_validate(self._from_json(existing_raw))
             updated = existing.model_copy(update={"last_resource_snapshot": snapshot})
             await self._redis.set(key, updated.model_dump_json())
+            self._node_last_snapshot[node_id] = (snapshot.cpu_utilization, snapshot.memory_utilization)
         except RedisError as exc:
             raise StateStoreError(f"Failed to upsert snapshot for node={node_id}") from exc
 
@@ -337,6 +376,22 @@ class RedisStateStore(StateStore):
             return RestartCounter.model_validate(self._from_json(raw))
         return RestartCounter(service_id=service_id, count=parsed, updated_at=datetime.now(UTC))
 
+    async def get_service_generation(self, service_id: str) -> int:
+        try:
+            raw = await self._redis.get(self._k(f"service:{service_id}:generation"))
+        except RedisError as exc:
+            raise StateStoreError("Failed to get service generation") from exc
+        if raw is None:
+            return 0
+        return int(raw)
+
+    async def increment_service_generation(self, service_id: str) -> int:
+        try:
+            new_gen = await self._redis.incr(self._k(f"service:{service_id}:generation"))
+        except RedisError as exc:
+            raise StateStoreError("Failed to increment service generation") from exc
+        return int(new_gen)
+
     async def add_recovery_record(self, record: RecoveryRecord) -> None:
         key = self._k("recovery_history")
         try:
@@ -382,13 +437,14 @@ class RedisStateStore(StateStore):
 
 
 class InMemoryStateStore(StateStore):
-    def __init__(self, event_log_max_items: int = 500) -> None:
+    def __init__(self, event_log_max_items: int = 200) -> None:
         self._nodes: dict[str, NodeState] = {}
         self._desired: dict[str, ServiceDesiredState] = {}
         self._observed: dict[str, ServiceObservedState] = {}
         self._placement: dict[str, Placement] = {}
         self._pending: dict[str, PendingDeployment] = {}
         self._restart_counter: dict[str, RestartCounter] = {}
+        self._service_generation: dict[str, int] = {}
         self._recovery_history: deque[RecoveryRecord] = deque(maxlen=event_log_max_items)
         self._events: deque[EventRecord] = deque(maxlen=event_log_max_items)
         self._lock = asyncio.Lock()
@@ -517,6 +573,17 @@ class InMemoryStateStore(StateStore):
     async def get_restart_counter(self, service_id: str) -> RestartCounter:
         async with self._lock:
             return self._restart_counter.get(service_id, RestartCounter(service_id=service_id))
+
+    async def get_service_generation(self, service_id: str) -> int:
+        async with self._lock:
+            return self._service_generation.get(service_id, 0)
+
+    async def increment_service_generation(self, service_id: str) -> int:
+        async with self._lock:
+            current = self._service_generation.get(service_id, 0)
+            new_gen = current + 1
+            self._service_generation[service_id] = new_gen
+            return new_gen
 
     async def add_recovery_record(self, record: RecoveryRecord) -> None:
         async with self._lock:
