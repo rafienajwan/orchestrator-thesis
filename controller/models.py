@@ -100,6 +100,8 @@ class ServiceObservedState(OrchestratorBaseModel):
     container_id: str | None = None
     node_id: str | None = None
     last_reported_at: datetime = Field(default_factory=utc_now)
+    service_generation: int = Field(default=0, ge=0)
+    startup_grace_until: datetime | None = None
 
 
 class Placement(OrchestratorBaseModel):
@@ -155,3 +157,14 @@ class AgentHealthReport(OrchestratorBaseModel):
     healthy: bool
     consecutive_failures: int = Field(default=0, ge=0)
     observed_at: datetime = Field(default_factory=utc_now)
+    service_generation: int | None = None
+
+
+class AgentCrashReport(OrchestratorBaseModel):
+    node_id: str
+    service_id: str
+    container_id: str
+    event_type: str  # die, kill, oom
+    exit_code: int = Field(default=-1)
+    occurred_at: datetime = Field(default_factory=utc_now)
+    service_generation: int | None = None
