@@ -59,8 +59,12 @@ class ControllerSettings(BaseSettings):
 
     max_restart_attempts: int = 2
     cooldown_intervals_after_recovery: int = 1
+    startup_grace_period_seconds: int = Field(default=45, ge=0, le=300)
 
-    event_log_max_items: int = Field(default=500, ge=100, le=10_000)
+    event_log_max_items: int = Field(default=200, ge=100, le=10_000)
+
+    heartbeat_write_threshold_seconds: int = Field(default=10, ge=0, le=60)
+    snapshot_change_threshold: float = Field(default=0.05, ge=0.0, le=1.0)
 
     ingress_enabled: bool = Field(
         default=True,

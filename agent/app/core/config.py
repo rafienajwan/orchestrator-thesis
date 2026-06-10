@@ -21,10 +21,14 @@ class AgentSettings(BaseSettings):
     agent_port: int = Field(default=8080, ge=1, le=65535)
     log_level: str = "INFO"
 
-    telemetry_interval_seconds: int = Field(default=5, ge=1, le=60)
+    telemetry_interval_seconds: int = Field(default=3, ge=1, le=60)
     health_check_interval_seconds: int = Field(default=10, ge=1, le=60)
     health_check_timeout_seconds: int = Field(default=2, ge=1, le=30)
     health_check_retries: int = Field(default=3, ge=1, le=10)
+    resource_snapshot_interval_seconds: int = Field(default=15, ge=1, le=120)
+
+    docker_event_watcher_enabled: bool = True
+    crash_report_cooldown_seconds: int = Field(default=3, ge=0, le=60)
 
     docker_network_name: str = Field(default="orchestrator-thesis-net", min_length=1)
     docker_base_url: str | None = None
