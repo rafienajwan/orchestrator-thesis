@@ -42,6 +42,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         redis=redis_client,
         key_prefix=settings.redis_key_prefix,
         event_log_max_items=settings.event_log_max_items,
+        heartbeat_write_threshold_seconds=settings.heartbeat_write_threshold_seconds,
+        snapshot_change_threshold=settings.snapshot_change_threshold,
     )
     agent_client = HttpAgentClient(
         deploy_timeout_seconds=float(settings.agent_deploy_timeout_seconds),
@@ -88,6 +90,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     finally:
         stop_event.set()
         await asyncio.gather(reconcile_task, return_exceptions=True)
+        await agent_client.close()
         await redis_client.aclose()
 
 

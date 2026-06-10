@@ -59,6 +59,11 @@ class HttpAgentClient(AgentClient):
         self._deploy_timeout = self._build_timeout(deploy_timeout_seconds)
         self._command_timeout = self._build_timeout(command_timeout_seconds)
         self._read_timeout = self._build_timeout(read_timeout_seconds)
+        # Shared connection pool for all agent communications
+        self._client = httpx.AsyncClient(
+            timeout=self._command_timeout,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
 
     @staticmethod
     def _build_timeout(operation_timeout_seconds: float) -> httpx.Timeout:
@@ -68,6 +73,9 @@ class HttpAgentClient(AgentClient):
             write=operation_timeout_seconds,
             pool=5.0,
         )
+
+    async def close(self) -> None:
+        await self._client.aclose()
 
     async def deploy(self, agent_url: str, service: ServiceSpec) -> AgentDeployResponse:
         url = f"{agent_url.rstrip('/')}/execute/deploy"
@@ -144,10 +152,9 @@ class HttpAgentClient(AgentClient):
         service_id: str,
     ) -> httpx.Response:
         try:
-            async with httpx.AsyncClient(timeout=request_timeout) as client:
-                response = await client.post(url, json=payload)
-                response.raise_for_status()
-                return response
+            response = await self._client.post(url, json=payload, timeout=request_timeout)
+            response.raise_for_status()
+            return response
         except httpx.TimeoutException as exc:
             timeout_seconds = request_timeout.read
             raise AgentClientError(
@@ -159,7 +166,6 @@ class HttpAgentClient(AgentClient):
         url: str,
         request_timeout: httpx.Timeout,
     ) -> httpx.Response:
-        async with httpx.AsyncClient(timeout=request_timeout) as client:
-            response = await client.get(url)
-            response.raise_for_status()
-            return response
+        response = await self._client.get(url, timeout=request_timeout)
+        response.raise_for_status()
+        return response
